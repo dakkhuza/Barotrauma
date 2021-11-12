@@ -86,6 +86,18 @@ namespace Barotrauma
         public void SetFlags(IEnumerable<string> newFlags)
         {
             moduleFlags.Clear();
+            if (newFlags.Contains("hallwayhorizontal"))
+            {
+                moduleFlags.Add("hallwayhorizontal");
+                if (newFlags.Contains("ruin")) { moduleFlags.Add("ruin"); }
+                return;
+            }
+            if (newFlags.Contains("hallwayvertical"))
+            {
+                moduleFlags.Add("hallwayvertical");
+                if (newFlags.Contains("ruin")) { moduleFlags.Add("ruin"); }
+                return;
+            }
             if (!newFlags.Any())
             {
                 moduleFlags.Add("none");
