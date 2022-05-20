@@ -99,6 +99,10 @@
       <HintPath>..\..\Libraries\MoonSharp.Interpreter.dll</HintPath>
     </Reference>
   </ItemGroup>
+  
+  <ItemGroup>
+    <Folder Include="InLevelOutposts\RelocateRuins\" />
+  </ItemGroup>
 
   <!-- Sourced from https://stackoverflow.com/a/45248069 -->
   <Target Name="GetGitRevision" BeforeTargets="WriteGitRevision" Condition="'$(BuildHash)' == ''">
