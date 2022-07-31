@@ -47,18 +47,26 @@ namespace Barotrauma.MoreLevelContent.Client.UI
             bottom = new GUILayoutGroup(new RectTransform((contentFrame.RectTransform.RelativeSize.X, 0.04f), mainLayout.RectTransform), isHorizontal: true) { Stretch = true, RelativeSpacing = 0.01f };
 
             var tabToSelect = Tab.Debug;
-
-            if (GameMain.Client.HasPermission(Networking.ClientPermissions.ManageSettings))
-            {
-                CreateGeneralTab();
-                CreatePirateOutpostTab();
-                tabToSelect = Tab.General;
-            }
+            tabToSelect = MakePermissionLockedTabs(tabToSelect);
             CreateDebugTab();
 
             CreateBottomButtons();
 
             SelectTab(tabToSelect);
+        }
+
+        private Tab MakePermissionLockedTabs(Tab defaultTab)
+        {
+            // If we're not in single player
+            if (!GameMain.IsSingleplayer)
+            {
+                // and we don't have perms
+                if (!GameMain.Client.HasPermission(Networking.ClientPermissions.ManageSettings)) 
+                    return defaultTab; // don't create perm locked tabs
+            }
+            CreateGeneralTab();
+            CreatePirateOutpostTab();
+            return Tab.General;
         }
 
         GUITextBlock moveRuinsChanceDisplay;

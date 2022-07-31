@@ -34,8 +34,7 @@ namespace Barotrauma.MoreLevelContent.Config
             Log.Debug("[CLIENT] Config Updated");
             Log.Verbose(Config.ToString());
 
-            // Rework this to be better
-            UpdateConfig();
+            if (!GameMain.IsSingleplayer) UpdateConfig();
             SaveConfig();
         }
 

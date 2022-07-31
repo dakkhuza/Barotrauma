@@ -4,7 +4,6 @@ using System.Runtime.CompilerServices;
 
 namespace MoreLevelContent.Shared.Data
 {
-    [Serializable]
     public class LevelData_MLC
     {
         public bool HasBeaconConstruction;
