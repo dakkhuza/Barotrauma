@@ -91,6 +91,8 @@ namespace Barotrauma.MapCreatures.Behavior
         {  
             foreach (BallastFloraBranch branch in Branches)
             {
+                if (branch.IsRoot && isDead) { continue; }
+                
                 if (branch.AccumulatedDamage > 0)
                 {
                     CreateDamageParticle(branch, branch.AccumulatedDamage);
@@ -101,8 +103,7 @@ namespace Barotrauma.MapCreatures.Behavior
                         GUI.AddMessage($"{(int)branch.AccumulatedDamage}", GUIStyle.Red, pos, Vector2.UnitY * 10.0f, 3f, playSound: false, subId: Parent?.Submarine?.ID ?? -1);
                     }
                 }
-                if (Character.Controlled != null && Character.Controlled.CurrentHull == branch.CurrentHull &&
-                    branch.IsRoot && 
+                if (Character.Controlled != null && Character.Controlled.CurrentHull == branch.CurrentHull && branch.IsRoot &&
                     (branch.AccumulatedDamage > 0.0f || branch.AccumulatedDamage < -0.1f))
                 {
                     Character.Controlled.UpdateHUDProgressBar(this, 
@@ -183,8 +184,21 @@ namespace Barotrauma.MapCreatures.Behavior
 
                 Color branchColor = (branch.IsRoot || branch.IsRootGrowth) ? RootColor : Color.White;
 
+
                 if (GameMain.DebugDraw)
                 {
+                    if (branch.DisconnectedFromRoot && branch.ParentBranch == null)
+                    {
+                        branchColor = Color.Yellow;
+                    }
+                    else if (branch.DisconnectedFromRoot)
+                    {
+                        branchColor = Color.Cyan;
+                    }
+                    else if (branch.ParentBranch == null)
+                    {
+                        branchColor = Color.Magenta;
+                    }
 #if DEBUG
                     Vector2 basePos = Parent.WorldPosition;
                     foreach (var (from, to) in debugSearchLines)

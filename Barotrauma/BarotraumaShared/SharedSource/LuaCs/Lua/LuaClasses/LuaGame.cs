@@ -16,10 +16,12 @@ namespace Barotrauma
 		public bool IsMultiplayer => GameMain.IsMultiplayer;
 
 #if CLIENT
+		public bool? ForceVoice = null;
+		public bool? ForceLocalVoice = null;
+
 		public bool Paused => GameMain.Instance?.Paused == true;
-
 		public byte MyID => GameMain.Client.ID;
-
+		public ChatMode ActiveChatMode => GameMain.ActiveChatMode;
 
 		public ChatBox ChatBox
 		{
@@ -31,6 +33,38 @@ namespace Barotrauma
 					return GameMain.Client.ChatBox;
 			}
 		}
+
+		public Sounds.SoundManager SoundManager
+        {
+            get
+            {
+				return GameMain.SoundManager;
+            }
+        }
+
+		public Lights.LightManager LightManager
+		{
+			get
+			{
+				return GameMain.LightManager;
+			}
+		}
+
+		public SubEditorScreen SubEditorScreen
+		{
+			get
+			{
+				return GameMain.SubEditorScreen;
+			}
+		}
+
+		public bool IsSubEditor
+        {
+            get
+            {
+				return Screen.Selected is SubEditorScreen;
+            }
+        }
 #else
 
 		public bool IsDedicated
@@ -159,13 +193,13 @@ namespace Barotrauma
 		}
 
 #if SERVER
-			public ServerPeer Peer
+		public ServerPeer Peer
+		{
+			get
 			{
-				get
-				{
-					return GameMain.Server.ServerPeer;
-				}
+				return GameMain.Server.ServerPeer;
 			}
+		}
 #else
 		public ClientPeer Peer
 		{
@@ -333,14 +367,13 @@ namespace Barotrauma
 
 		public void AddCommand(string name, string help, LuaCsAction onExecute, LuaCsFunc getValidArgs = null, bool isCheat = false)
 		{
-			var cmd = new DebugConsole.Command(name, help, (string[] arg1) => { onExecute(arg1); },
+			var cmd = new DebugConsole.Command(name, help, (string[] arg1) => { onExecute(new object[] { arg1 }); },
 				() =>
 				{
-					if (getValidArgs == null) return null;
+					if (getValidArgs == null) { return null; }
 					var obj = getValidArgs();
-					if (obj is LuaResult res) obj = res.Object();
-					if (obj is string[][]) return (string[][])obj;
-					return null;
+					if (obj is LuaResult lr) { return lr.DynValue().ToObject<string[][]>(); }
+					return (string[][])obj;
 				}, isCheat);
 
 			luaAddedCommand.Add(cmd);
@@ -351,8 +384,22 @@ namespace Barotrauma
 
 		public void AssignOnExecute(string names, object onExecute) => DebugConsole.AssignOnExecute(names, (string[] a) => { GameMain.LuaCs.CallLuaFunction(onExecute, new object[] { a }); });
 
+		public void SaveGame(string path)
+        {
+			if (LuaCsFile.CanWriteToPath(path)) { throw new ScriptRuntimeException($"Saving files to {path} is disallowed."); }
+			SaveUtil.SaveGame(path);
+        }
+
+		public void LoadGame(string path)
+		{
+			SaveUtil.LoadGame(path);
+		}
 
 #if SERVER
+		public void LoadCampaign(string path)
+		{
+			MultiPlayerCampaign.LoadCampaign(path);
+		}
 
 		public static void SendMessage(string msg, ChatMessageType? messageType = null, Client sender = null, Character character = null)
 		{

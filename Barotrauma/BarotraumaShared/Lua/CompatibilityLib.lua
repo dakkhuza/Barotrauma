@@ -2,9 +2,11 @@
 
 local compatibilityLib = {}
 
-LuaUserData.AddMethod(LuaUserData.RegisterType("Barotrauma.LuaUserData"), "AddCallMetaMember", function (v)
-    print("AddCallMetaMember is deprecated, use debug.setmetatable instead.")
-end)
+local networking = LuaUserData.RegisterType("Barotrauma.LuaCsNetworking")
+
+LuaUserData.AddMethod(networking, "RequestGetHTTP", Networking.HttpGet)
+
+LuaUserData.AddMethod(networking, "RequestPostHTTP", Networking.HttpPost)
 
 compatibilityLib.CreateVector2 = Vector2.__new
 compatibilityLib.CreateVector3 = Vector3.__new
@@ -75,5 +77,21 @@ luaPlayer.CheckPermission = function (client, permissions)
 end
 
 compatibilityLib["Player"] = luaPlayer
+
+Hook.Add("character.created", "compatibility.character.created", function (character)
+    Hook.Call("characterCreated", character)
+end)
+
+Hook.Add("character.death", "compatibility.character.death", function (character, causeOfDeathAffliction)
+    Hook.Call("characterDeath", character, causeOfDeathAffliction)
+end)
+
+Hook.Add("client.connected", "compatibility.client.connected", function (client)
+    Hook.Call("clientConnected", client)
+end)
+
+Hook.Add("client.disconnected", "compatibility.client.disconnected", function (client)
+    Hook.Call("clientDisconnected", client)
+end)
 
 return compatibilityLib

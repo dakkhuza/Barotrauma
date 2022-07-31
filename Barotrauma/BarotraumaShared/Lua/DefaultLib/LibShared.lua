@@ -1,8 +1,10 @@
 local defaultLib = {}
 
-local AddCallMetaTable = LuaSetup.AddCallMetaTable
-local CreateStatic = LuaSetup.CreateStatic
-local CreateEnum = LuaUserData.CreateEnumTable
+local AddCallMetaTable = LuaSetup.LuaUserData.AddCallMetaTable
+local CreateStatic = LuaSetup.LuaUserData.CreateStatic
+local CreateEnum = LuaSetup.LuaUserData.CreateEnumTable
+
+require("DefaultLib/Utils/SteamApi")
 
 defaultLib["Byte"] = CreateStatic("Barotrauma.LuaByte", true)
 defaultLib["UShort"] = CreateStatic("Barotrauma.LuaUShort", true)
@@ -30,6 +32,12 @@ defaultLib["CauseOfDeathType"] = CreateEnum("Barotrauma.CauseOfDeathType")
 defaultLib["CharacterTeamType"] = CreateEnum("Barotrauma.CharacterTeamType")
 defaultLib["ClientPermissions"] = CreateEnum("Barotrauma.Networking.ClientPermissions")
 defaultLib["OrderCategory"] = CreateEnum("Barotrauma.OrderCategory")
+defaultLib["WearableType"] = CreateEnum("Barotrauma.WearableType")
+defaultLib["NumberType"] = CreateEnum("Barotrauma.NumberType")
+defaultLib["GameDifficulty"] = CreateEnum("Barotrauma.GameDifficulty")
+defaultLib["StartingBalanceAmount"] = CreateEnum("Barotrauma.StartingBalanceAmount")
+defaultLib["ChatMode"] = CreateEnum("Barotrauma.ChatMode")
+defaultLib["CharacterType"] = CreateEnum("Barotrauma.CharacterType")
 defaultLib["InputType"] = CreateStatic("Barotrauma.InputType")
 
 
@@ -46,9 +54,12 @@ defaultLib["Client"] = CreateStatic("Barotrauma.Networking.Client", true)
 defaultLib["Character"] = CreateStatic("Barotrauma.Character")
 defaultLib["CharacterPrefab"] = CreateStatic("Barotrauma.CharacterPrefab")
 defaultLib["CharacterInfo"] = CreateStatic("Barotrauma.CharacterInfo", true)
+AddCallMetaTable(defaultLib["CharacterInfo"].HeadPreset)
+AddCallMetaTable(defaultLib["CharacterInfo"].HeadInfo)
 defaultLib["CharacterInfoPrefab"] = CreateStatic("Barotrauma.CharacterInfoPrefab")
 defaultLib["Item"] = CreateStatic("Barotrauma.Item", true)
 AddCallMetaTable(defaultLib["Item"].ChangePropertyEventData)
+defaultLib["MapEntityPrefab"] = CreateStatic("Barotrauma.MapEntityPrefab")
 defaultLib["ItemPrefab"] = CreateStatic("Barotrauma.ItemPrefab", true)
 defaultLib["TalentTree"] = CreateStatic("Barotrauma.TalentTree", true)
 defaultLib["TalentPrefab"] = CreateStatic("Barotrauma.TalentPrefab", true)
@@ -56,7 +67,9 @@ defaultLib["FactionPrefab"] = CreateStatic("Barotrauma.FactionPrefab", true)
 defaultLib["Level"] = CreateStatic("Barotrauma.Level")
 defaultLib["Job"] = CreateStatic("Barotrauma.Job", true)
 defaultLib["JobPrefab"] = CreateStatic("Barotrauma.JobPrefab", true)
+defaultLib["JobVariant"] = CreateStatic("Barotrauma.JobVariant", true)
 defaultLib["AfflictionPrefab"] = CreateStatic("Barotrauma.AfflictionPrefab", true)
+defaultLib["SkillSettings"] = CreateStatic("Barotrauma.SkillSettings", true)
 defaultLib["ChatMessage"] = CreateStatic("Barotrauma.Networking.ChatMessage")
 defaultLib["Structure"] = CreateStatic("Barotrauma.Structure", true)
 defaultLib["Hull"] = CreateStatic("Barotrauma.Hull", true)
@@ -72,6 +85,8 @@ defaultLib["Screen"] = CreateStatic("Barotrauma.Screen")
 defaultLib["AttackResult"] = CreateStatic("Barotrauma.AttackResult", true)
 defaultLib["TempClient"] = CreateStatic("Barotrauma.Networking.TempClient", true)
 defaultLib["TraitorMissionResult"] = CreateStatic("Barotrauma.TraitorMissionResult", true)
+defaultLib["DecalManager"] = CreateStatic("Barotrauma.DecalManager", true)
+defaultLib["AutoItemPlacer"] = CreateStatic("Barotrauma.AutoItemPlacer")
 
 defaultLib["Explosion"] = CreateStatic("Barotrauma.Explosion", true)
 

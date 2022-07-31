@@ -187,7 +187,7 @@ namespace Barotrauma.Items.Components
             set;
         }
 
-        public override void Move(Vector2 amount)
+        public override void Move(Vector2 amount, bool ignoreContacts = false)
         {
 #if CLIENT
             Light.Position += amount;
@@ -238,6 +238,12 @@ namespace Barotrauma.Items.Components
             base.OnItemLoaded();
             SetLightSourceState(IsActive, lightBrightness);
             turret = item.GetComponent<Turret>();
+#if CLIENT
+            if (Screen.Selected.IsEditor)
+            {
+                OnMapLoaded();
+            }
+#endif
         }
 
         public override void OnMapLoaded()

@@ -47,7 +47,9 @@ namespace Barotrauma
             CreateUI();
             UpdateLocationView(campaignUI.Campaign.Map.CurrentLocation, true);
 
-            campaignUI.Campaign.Map.OnLocationChanged += (prevLocation, newLocation) => UpdateLocationView(newLocation, true, prevLocation);
+            campaignUI.Campaign.Map.OnLocationChanged.RegisterOverwriteExisting(
+                "CrewManagement.UpdateLocationView".ToIdentifier(), 
+                (locationChangeInfo) => UpdateLocationView(locationChangeInfo.NewLocation, true, locationChangeInfo.PrevLocation));
         }
 
         public void RefreshPermissions()
@@ -193,12 +195,13 @@ namespace Barotrauma
             };
             validateHiresButton = new GUIButton(new RectTransform(new Vector2(1.0f / 3.0f, 1.0f), group.RectTransform), text: TextManager.Get("campaigncrew.validate"))
             {
-                ClickSound = GUISoundType.HireRepairClick,
+                ClickSound = GUISoundType.ConfirmTransaction,
                 ForceUpperCase = ForceUpperCase.Yes,
                 OnClicked = (b, o) => ValidateHires(PendingHires, true)
             };
             clearAllButton = new GUIButton(new RectTransform(new Vector2(1.0f / 3.0f, 1.0f), group.RectTransform), text: TextManager.Get("campaignstore.clearall"))
             {
+                ClickSound = GUISoundType.Cart,
                 ForceUpperCase = ForceUpperCase.Yes,
                 Enabled = HasPermission,
                 OnClicked = (b, o) => RemoveAllPendingHires()
@@ -403,6 +406,7 @@ namespace Barotrauma
             {
                 var hireButton = new GUIButton(new RectTransform(new Vector2(width, 0.9f), mainGroup.RectTransform), style: "CrewManagementAddButton")
                 {
+                    ClickSound = GUISoundType.Cart,
                     UserData = characterInfo,
                     Enabled = HasPermission,
                     OnClicked = (b, o) => AddPendingHire(o as CharacterInfo)
@@ -429,6 +433,7 @@ namespace Barotrauma
             {
                 new GUIButton(new RectTransform(new Vector2(width, 0.9f), mainGroup.RectTransform), style: "CrewManagementRemoveButton")
                 {
+                    ClickSound = GUISoundType.Cart,
                     UserData = characterInfo,
                     Enabled = HasPermission,
                     OnClicked = (b, o) => RemovePendingHire(o as CharacterInfo)

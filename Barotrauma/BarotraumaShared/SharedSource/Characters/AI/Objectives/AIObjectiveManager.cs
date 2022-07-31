@@ -80,7 +80,7 @@ namespace Barotrauma
 
         public void AddObjective<T>(T objective) where T : AIObjective
         {
-            var result = GameMain.LuaCs.Hook.Call<bool?>("AI.AddObjective", this, objective);
+            var result = GameMain.LuaCs.Hook.Call<bool?>("AI.addObjective", this, objective);
 
             if (result != null && result.Value) return;
 
@@ -151,7 +151,7 @@ namespace Barotrauma
                 }
                 var order = new Order(orderPrefab, autonomousObjective.Option, item ?? character.CurrentHull as Entity, orderPrefab.GetTargetItemComponent(item), orderGiver: character);
                 if (order == null) { continue; }
-                if ((order.IgnoreAtOutpost || autonomousObjective.IgnoreAtOutpost) && Level.IsLoadedOutpost && character.TeamID != CharacterTeamType.FriendlyNPC)
+                if ((order.IgnoreAtOutpost || autonomousObjective.IgnoreAtOutpost) && Level.IsLoadedFriendlyOutpost && character.TeamID != CharacterTeamType.FriendlyNPC)
                 {
                     if (Submarine.MainSub != null && Submarine.MainSub.DockedTo.None(s => s.TeamID != CharacterTeamType.FriendlyNPC && s.TeamID != character.TeamID))
                     {

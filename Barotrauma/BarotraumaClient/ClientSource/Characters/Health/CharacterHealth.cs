@@ -6,7 +6,6 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Xml.Linq;
 
 namespace Barotrauma
 {
@@ -1345,6 +1344,7 @@ namespace Barotrauma
                 {
                     UserData = item,
                     DisabledColor = Color.White * 0.1f,
+                    PlaySoundOnSelect = false,
                     OnClicked = (btn, userdata) =>
                     {
                         if (!(userdata is ItemPrefab itemPrefab)) { return false; }
@@ -1352,6 +1352,7 @@ namespace Barotrauma
                         if (item == null) { return false; }
                         Limb targetLimb = Character.AnimController.Limbs.FirstOrDefault(l => l.HealthIndex == selectedLimbIndex);
                         item.ApplyTreatment(Character.Controlled, Character, targetLimb);
+                        SoundPlayer.PlayUISound(GUISoundType.Select);
                         return true;
                     }
                 };
@@ -2006,6 +2007,23 @@ namespace Barotrauma
 
             CalculateVitality();
             DisplayedVitality = Vitality;
+        }
+
+        partial void UpdateSkinTint()
+        {
+            FaceTint = DefaultFaceTint;
+            BodyTint = Color.TransparentBlack;
+
+            if (!(Character?.Params?.Health.ApplyAfflictionColors ?? false)) { return; }
+
+            foreach (KeyValuePair<Affliction, LimbHealth> kvp in afflictions)
+            {
+                var affliction = kvp.Key;
+                Color faceTint = affliction.GetFaceTint();
+                if (faceTint.A > FaceTint.A) { FaceTint = faceTint; }
+                Color bodyTint = affliction.GetBodyTint();
+                if (bodyTint.A > BodyTint.A) { BodyTint = bodyTint; }
+            }            
         }
 
         partial void UpdateLimbAfflictionOverlays()

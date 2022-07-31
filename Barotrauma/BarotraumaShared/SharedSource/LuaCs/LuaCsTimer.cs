@@ -6,20 +6,8 @@ namespace Barotrauma
 {
     public class LuaCsTimer
     {
-        public static long LastUpdateTime = 0;
-
         public static double Time => Timing.TotalTime;
-
         public static double GetTime() => Time;
-        
-        public static float GetUsageMemory()
-        {
-            Process proc = Process.GetCurrentProcess();
-            float memory = MathF.Round(proc.PrivateMemorySize64 / (1024 * 1024), 2);
-            proc.Dispose();
-
-            return memory;
-        }
 
         private class TimerComparer : IComparer<TimedAction>
         {
@@ -27,21 +15,19 @@ namespace Barotrauma
             {
                 if (timedAction1 == null || timedAction2 == null)
                     return 0;
-                return -Math.Sign(timedAction2.executionTime - timedAction1.executionTime);
+                return -Math.Sign(timedAction2.ExecutionTime - timedAction1.ExecutionTime);
             }
         }
 
         private class TimedAction
         {
-            public LuaCsAction action
+            public LuaCsAction Action
             {
                 get;
                 private set;
             }
 
-            private int delayMs;
-
-            public double executionTime
+            public double ExecutionTime
             {
                 get;
                 private set;
@@ -49,9 +35,8 @@ namespace Barotrauma
             
             public TimedAction(LuaCsAction action, int delayMs)
             {
-                this.action = action;
-                this.delayMs = delayMs;
-                executionTime = Time + (delayMs / 1000f);
+                this.Action = action;
+                ExecutionTime = Time + (delayMs / 1000f);
             }
         }
         
@@ -71,18 +56,32 @@ namespace Barotrauma
 
         public void Update()
         {
-            while (timedActions.Count > 0)
+            List<TimedAction> timedActionsToRemove = new List<TimedAction>();
+            for (int i = 0; i < timedActions.Count; i++)
             {
-                TimedAction timedAction = timedActions[0];
-                if (Time >= timedAction.executionTime)
+                TimedAction timedAction = timedActions[i];
+                if (Time >= timedAction.ExecutionTime)
                 {
-                    timedAction.action();
-                    timedActions.RemoveAt(0);
+                    try
+                    {
+                        timedAction.Action();
+                    }
+                    catch (Exception e)
+                    {
+                        GameMain.LuaCs.HandleException(e, "", LuaCsSetup.ExceptionType.CSharp);
+                    }
+
+                    timedActionsToRemove.Add(timedAction);
                 }
                 else
                 {
                     break;
                 }
+            }
+            
+            foreach (TimedAction timedAction in timedActionsToRemove)
+            {
+                timedActions.Remove(timedAction);
             }
         }
 

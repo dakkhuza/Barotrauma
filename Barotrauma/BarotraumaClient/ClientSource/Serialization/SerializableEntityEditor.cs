@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Barotrauma.Items.Components;
 using Barotrauma.Extensions;
+using System.Diagnostics;
 
 namespace Barotrauma
 {
@@ -59,7 +60,7 @@ namespace Barotrauma
                 {
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Float)
+                        if (numInput.InputType == NumberType.Float)
                         {
                             numInput.FloatValue = f;
                             if (flash)
@@ -76,7 +77,7 @@ namespace Barotrauma
                 {
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Int)
+                        if (numInput.InputType == NumberType.Int)
                         {
                             numInput.IntValue = integer;
                             if (flash)
@@ -127,7 +128,7 @@ namespace Barotrauma
                     var field = fields[i];
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Float)
+                        if (numInput.InputType == NumberType.Float)
                         {
                             numInput.FloatValue = i == 0 ? v2.X : v2.Y;
                             if (flash)
@@ -145,7 +146,7 @@ namespace Barotrauma
                     var field = fields[i];
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Float)
+                        if (numInput.InputType == NumberType.Float)
                         {
                             switch (i)
                             {
@@ -174,7 +175,7 @@ namespace Barotrauma
                     var field = fields[i];
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Float)
+                        if (numInput.InputType == NumberType.Float)
                         {
                             switch (i)
                             {
@@ -206,7 +207,7 @@ namespace Barotrauma
                     var field = fields[i];
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Int)
+                        if (numInput.InputType == NumberType.Int)
                         {
                             switch (i)
                             {
@@ -246,7 +247,7 @@ namespace Barotrauma
                     var field = fields[i];
                     if (field is GUINumberInput numInput)
                     {
-                        if (numInput.InputType == GUINumberInput.NumberType.Int)
+                        if (numInput.InputType == NumberType.Int)
                         {
                             switch (i)
                             {
@@ -517,7 +518,7 @@ namespace Barotrauma
             }
             else
             {
-                var numberInput = new GUINumberInput(new RectTransform(new Vector2(inputFieldWidth, 1), frame.RectTransform, Anchor.TopRight), GUINumberInput.NumberType.Int)
+                var numberInput = new GUINumberInput(new RectTransform(new Vector2(inputFieldWidth, 1), frame.RectTransform, Anchor.TopRight), NumberType.Int)
                 {
                     ToolTip = toolTip,
                     Font = GUIStyle.SmallFont
@@ -554,7 +555,7 @@ namespace Barotrauma
             };
             
             GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(inputFieldWidth, 1), frame.RectTransform,
-                Anchor.TopRight), GUINumberInput.NumberType.Float)
+                Anchor.TopRight), NumberType.Float)
             {
                 ToolTip = toolTip,
                 Font = GUIStyle.SmallFont
@@ -629,16 +630,18 @@ namespace Barotrauma
 
             bool isFlagsAttribute = value.GetType().IsDefined(typeof(FlagsAttribute), false);
 
+            bool hasNoneOption = false;
             foreach (object enumValue in Enum.GetValues(value.GetType()))
             {
                 if (isFlagsAttribute && !MathHelper.IsPowerOfTwo((int)enumValue)) { continue; }
-
+                hasNoneOption |= (int)enumValue == 0;
                 enumDropDown.AddItem(enumValue.ToString(), enumValue);
                 if (((int)enumValue != 0 || (int)value == 0) && ((Enum)value).HasFlag((Enum)enumValue))
                 {
                     enumDropDown.SelectItem(enumValue);
                 }
             }
+            enumDropDown.MustSelectAtLeastOne = !hasNoneOption;
             enumDropDown.OnSelected += (selected, val) =>
             {
                 if (SetPropertyValue(property, entity, string.Join(", ", enumDropDown.SelectedDataMultiple.Select(d => d.ToString()))))
@@ -770,7 +773,7 @@ namespace Barotrauma
 
                 new GUITextBlock(new RectTransform(new Vector2(0.3f, 1), element.RectTransform, Anchor.CenterLeft), componentLabel, font: GUIStyle.SmallFont, textAlignment: Alignment.Center);
                 GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(0.7f, 1), element.RectTransform, Anchor.CenterRight),
-                    GUINumberInput.NumberType.Int)
+                    NumberType.Int)
                 {
                     Font = GUIStyle.SmallFont
                 };
@@ -838,7 +841,7 @@ namespace Barotrauma
                 }
                 new GUITextBlock(new RectTransform(new Vector2(0.3f, 1), element.RectTransform, Anchor.CenterLeft), componentLabel, font: GUIStyle.SmallFont, textAlignment: Alignment.Center);
                 GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(0.7f, 1), element.RectTransform, Anchor.CenterRight),
-                    GUINumberInput.NumberType.Float)
+                    NumberType.Float)
                 {
                     Font = GUIStyle.SmallFont
                 };
@@ -909,7 +912,7 @@ namespace Barotrauma
 
                 new GUITextBlock(new RectTransform(new Vector2(0.3f, 1), element.RectTransform, Anchor.CenterLeft), componentLabel, font: GUIStyle.SmallFont, textAlignment: Alignment.Center);
                 GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(0.7f, 1), element.RectTransform, Anchor.CenterRight),
-                    GUINumberInput.NumberType.Float)
+                    NumberType.Float)
                 {
                     Font = GUIStyle.SmallFont
                 };
@@ -985,7 +988,7 @@ namespace Barotrauma
 
                 new GUITextBlock(new RectTransform(new Vector2(0.3f, 1), element.RectTransform, Anchor.CenterLeft), componentLabel, font: GUIStyle.SmallFont, textAlignment: Alignment.Center);
                 GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(0.7f, 1), element.RectTransform, Anchor.CenterRight),
-                    GUINumberInput.NumberType.Float)
+                    NumberType.Float)
                 {
                     Font = GUIStyle.SmallFont
                 };
@@ -1078,7 +1081,7 @@ namespace Barotrauma
                 };
                 new GUITextBlock(new RectTransform(new Vector2(0.2f, 1), element.RectTransform, Anchor.CenterLeft) { MinSize = new Point(15, 0) }, GUI.ColorComponentLabels[i], font: GUIStyle.SmallFont, textAlignment: Alignment.Center);
                 GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(0.7f, 1), element.RectTransform, Anchor.CenterRight),
-                    GUINumberInput.NumberType.Int)
+                    NumberType.Int)
                 {
                     Font = GUIStyle.SmallFont
                 };
@@ -1153,7 +1156,7 @@ namespace Barotrauma
                 var element = new GUIFrame(new RectTransform(new Vector2(0.22f, 1), inputArea.RectTransform) { MinSize = new Point(50, 0), MaxSize = new Point(150, 50) }, style: null);
                 new GUITextBlock(new RectTransform(new Vector2(0.3f, 1), element.RectTransform, Anchor.CenterLeft), GUI.RectComponentLabels[i], font: GUIStyle.SmallFont, textAlignment: Alignment.Center);
                 GUINumberInput numberInput = new GUINumberInput(new RectTransform(new Vector2(0.7f, 1), element.RectTransform, Anchor.CenterRight),
-                    GUINumberInput.NumberType.Int)
+                    NumberType.Int)
                 {
                     Font = GUIStyle.SmallFont
                 };
@@ -1282,6 +1285,7 @@ namespace Barotrauma
 
             var textList = new GUIListBox(new RectTransform(new Vector2(1.0f, 0.8f), msgBox.Content.RectTransform, Anchor.TopCenter))
             {
+                PlaySoundOnSelect = true,
                 OnSelected = (component, userData) =>
                 {
                     string text = userData as string ?? "";
@@ -1434,14 +1438,31 @@ namespace Barotrauma
                             }
                         }
                         break;
-                    case ItemComponent _ when entity is Item item:
-                        foreach (var component in item.Components)
+                    case ItemComponent parentComponent when entity is Item otherItem:
+                        if (otherItem == parentComponent.Item) { continue; }                        
+                        int componentIndex = parentComponent.Item.Components.FindAll(c => c.GetType() == parentComponent.GetType()).IndexOf(parentComponent);
+                        //find the component of the same type and same index from the other item
+                        var otherComponents = otherItem.Components.FindAll(c => c.GetType() == parentComponent.GetType());
+                        if (componentIndex >= 0 && componentIndex < otherComponents.Count)
                         {
-                            if (component.GetType() == parentObject.GetType() && component != parentObject)
+                            var component = otherComponents[componentIndex];
+                            Debug.Assert(component.GetType() == parentObject.GetType());                            
+                            SafeAdd(component, property);
+                            if (value is string stringValue && Enum.TryParse(property.PropertyType, stringValue, out var enumValue))
                             {
-                                SafeAdd(component, property);
-                                property.PropertyInfo.SetValue(component, value);
+                                property.PropertyInfo.SetValue(component, enumValue);
                             }
+                            else
+                            {
+                                try
+                                {
+                                    property.PropertyInfo.SetValue(component, value);
+                                }
+                                catch (ArgumentException e)
+                                {
+                                    DebugConsole.ThrowError($"Failed to set the value of the property \"{property.Name}\" to {value?.ToString() ?? "null"}", e);
+                                }
+                            }                            
                         }
                         break;
                 }

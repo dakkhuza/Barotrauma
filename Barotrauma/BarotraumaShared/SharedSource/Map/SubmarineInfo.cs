@@ -39,7 +39,15 @@ namespace Barotrauma
         public SubmarineTag Tags { get; private set; }
 
         public int RecommendedCrewSizeMin = 1, RecommendedCrewSizeMax = 2;
-        public string RecommendedCrewExperience;
+        
+        public enum CrewExperienceLevel
+        {
+            Unknown,
+            CrewExperienceLow,
+            CrewExperienceMid,
+            CrewExperienceHigh
+        }
+        public CrewExperienceLevel RecommendedCrewExperience;
 
         /// <summary>
         /// A random int that gets assigned when saving the sub. Used in mp campaign to verify that sub files match
@@ -78,6 +86,21 @@ namespace Barotrauma
             set;
         }
 
+        public bool NoItems
+        {
+            get;
+            set;
+        }
+
+        /// <summary>
+        /// Note: Refreshed for loaded submarines when they are saved, when they are loaded, and on round end. If you need to refresh it, please use Submarine.CheckFuel() method!
+        /// </summary>
+        public bool LowFuel
+        {
+            get;
+            set;
+        }
+
         public Version GameVersion
         {
             get;
@@ -86,9 +109,12 @@ namespace Barotrauma
 
         public SubmarineType Type { get; set; }
 
+        public bool IsManuallyOutfitted { get; set; }
+
         public SubmarineClass SubmarineClass;
 
         public OutpostModuleInfo OutpostModuleInfo { get; set; }
+        public BeaconStationInfo BeaconStationInfo { get; set; }
 
         public bool IsOutpost => Type == SubmarineType.Outpost || Type == SubmarineType.OutpostModule;
 
@@ -99,6 +125,8 @@ namespace Barotrauma
 
         public bool IsCampaignCompatible => IsPlayer && !HasTag(SubmarineTag.Shuttle) && !HasTag(SubmarineTag.HideInMenus) && SubmarineClass != SubmarineClass.Undefined;
         public bool IsCampaignCompatibleIgnoreClass => IsPlayer && !HasTag(SubmarineTag.Shuttle) && !HasTag(SubmarineTag.HideInMenus);
+
+        public bool AllowPreviewImage => Type == SubmarineType.Player;
 
         public Md5Hash MD5Hash
         {
@@ -261,6 +289,8 @@ namespace Barotrauma
             Description = original.Description;
             Price = original.Price;
             InitialSuppliesSpawned = original.InitialSuppliesSpawned;
+            NoItems = original.NoItems;
+            LowFuel = original.LowFuel;
             GameVersion = original.GameVersion;
             Type = original.Type;
             SubmarineClass = original.SubmarineClass;
@@ -275,10 +305,15 @@ namespace Barotrauma
             RecommendedCrewExperience = original.RecommendedCrewExperience;
             RecommendedCrewSizeMin = original.RecommendedCrewSizeMin;
             RecommendedCrewSizeMax = original.RecommendedCrewSizeMax;
+            IsManuallyOutfitted = original.IsManuallyOutfitted;
             Tags = original.Tags;
             if (original.OutpostModuleInfo != null)
             {
                 OutpostModuleInfo = new OutpostModuleInfo(original.OutpostModuleInfo);
+            }
+            if (original.BeaconStationInfo != null)
+            {
+                BeaconStationInfo = new BeaconStationInfo(original.BeaconStationInfo);
             }
 #if CLIENT
             PreviewImage = original.PreviewImage != null ? new Sprite(original.PreviewImage) : null;
@@ -320,6 +355,9 @@ namespace Barotrauma
             Price = SubmarineElement.GetAttributeInt("price", 1000);
 
             InitialSuppliesSpawned = SubmarineElement.GetAttributeBool("initialsuppliesspawned", false);
+            NoItems = SubmarineElement.GetAttributeBool("noitems", false);
+            LowFuel = SubmarineElement.GetAttributeBool("lowfuel", false);
+            IsManuallyOutfitted = SubmarineElement.GetAttributeBool("ismanuallyoutfitted", false);
 
             GameVersion = new Version(SubmarineElement.GetAttributeString("gameversion", "0.0.0.0"));
             if (Enum.TryParse(SubmarineElement.GetAttributeString("tags", ""), out SubmarineTag tags))
@@ -330,7 +368,24 @@ namespace Barotrauma
             CargoCapacity = SubmarineElement.GetAttributeInt("cargocapacity", -1);
             RecommendedCrewSizeMin = SubmarineElement.GetAttributeInt("recommendedcrewsizemin", 0);
             RecommendedCrewSizeMax = SubmarineElement.GetAttributeInt("recommendedcrewsizemax", 0);
-            RecommendedCrewExperience = SubmarineElement.GetAttributeString("recommendedcrewexperience", "Unknown");
+            var recommendedCrewExperience = SubmarineElement.GetAttributeIdentifier("recommendedcrewexperience", CrewExperienceLevel.Unknown.ToIdentifier());
+            // Backwards compatibility
+            if (recommendedCrewExperience == "Beginner")
+            {
+                RecommendedCrewExperience = CrewExperienceLevel.CrewExperienceLow;
+            }
+            else if (recommendedCrewExperience == "Intermediate")
+            {
+                RecommendedCrewExperience = CrewExperienceLevel.CrewExperienceMid;
+            }
+            else if (recommendedCrewExperience == "Experienced")
+            {
+                RecommendedCrewExperience = CrewExperienceLevel.CrewExperienceHigh;
+            }
+            else
+            {
+                Enum.TryParse(recommendedCrewExperience.Value, ignoreCase: true, out RecommendedCrewExperience);
+            }
 
             if (SubmarineElement?.Attribute("type") != null)
             {
@@ -340,6 +395,10 @@ namespace Barotrauma
                     if (Type == SubmarineType.OutpostModule)
                     {
                         OutpostModuleInfo = new OutpostModuleInfo(this, SubmarineElement);
+                    }
+                    else if (Type == SubmarineType.BeaconStation)
+                    {
+                        BeaconStationInfo = new BeaconStationInfo(this, SubmarineElement);
                     }
                 }
             }
@@ -357,20 +416,6 @@ namespace Barotrauma
             else
             {
                 SubmarineClass = SubmarineClass.Undefined;
-            }
-
-            //backwards compatibility (use text tags instead of the actual text)
-            if (RecommendedCrewExperience == "Beginner")
-            {
-                RecommendedCrewExperience = "CrewExperienceLow";
-            }
-            else if (RecommendedCrewExperience == "Intermediate")
-            {
-                RecommendedCrewExperience = "CrewExperienceMid";
-            }
-            else if (RecommendedCrewExperience == "Experienced")
-            {
-                RecommendedCrewExperience = "CrewExperienceHigh";
             }
 
             RequiredContentPackages.Clear();
@@ -528,10 +573,15 @@ namespace Barotrauma
                 OutpostModuleInfo.Save(newElement);
                 OutpostModuleInfo = new OutpostModuleInfo(this, newElement);
             }
+            else if (Type == SubmarineType.BeaconStation)
+            {
+                BeaconStationInfo.Save(newElement);
+                BeaconStationInfo = new BeaconStationInfo(this, newElement);
+            }
             XDocument doc = new XDocument(newElement);
 
             doc.Root.Add(new XAttribute("name", Name));
-            if (previewImage != null)
+            if (previewImage != null && AllowPreviewImage)
             {
                 doc.Root.Add(new XAttribute("previewimage", Convert.ToBase64String(previewImage.ToArray())));
             }
@@ -590,6 +640,7 @@ namespace Barotrauma
             List<string> filePaths = new List<string>();
             foreach (BaseSubFile subFile in contentPackageSubs)
             {
+                if (!File.Exists(subFile.Path.Value)) { continue; }
                 if (!filePaths.Any(fp => fp == subFile.Path))
                 {
                     filePaths.Add(subFile.Path.Value);

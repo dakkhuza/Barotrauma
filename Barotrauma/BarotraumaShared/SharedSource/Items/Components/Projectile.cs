@@ -231,6 +231,13 @@ namespace Barotrauma.Items.Components
             set;
         }
 
+        [Serialize(false, IsPropertySaveable.No, description:"Enable only if you want to make the projectile ignore collisions with other projectiles when it's shot. Doesn't have any effect, if the item is not set to be damaged by projectiles.")]
+        public bool IgnoreProjectilesWhileActive
+        {
+            get;
+            set;
+        }
+
         public Body StickTarget 
         { 
             get; 
@@ -405,6 +412,10 @@ namespace Barotrauma.Items.Components
 
             item.body.CollisionCategories = Physics.CollisionProjectile;
             item.body.CollidesWith = Physics.CollisionCharacter | Physics.CollisionWall | Physics.CollisionLevel | Physics.CollisionItemBlocking;
+            if (item.Prefab.DamagedByProjectiles && !IgnoreProjectilesWhileActive)
+            {
+                item.body.CollidesWith |= Physics.CollisionProjectile;
+            }
 
             IsActive = true;
 
@@ -731,7 +742,7 @@ namespace Barotrauma.Items.Components
                     limb.body?.ApplyLinearImpulse(item.body.LinearVelocity * item.body.Mass * 0.1f, item.SimPosition);
                     return false;
                 }
-                if (!FriendlyFire && User != null && limb.character.IsFriendly(User))
+                if (!FriendlyFire && User != null && limb.character.IsFriendly(User) && HumanAIController.IsOnFriendlyTeam(limb.character, User))
                 {
                     return false;
                 }
@@ -778,6 +789,11 @@ namespace Barotrauma.Items.Components
 
         private bool ShouldIgnoreSubmarineCollision(ref Fixture target, Contact contact)
         {
+            //not in the projectile category: the projectile has not been launched (e.g. just dropped from an inventory)
+            if (item.body.CollisionCategories != Physics.CollisionProjectile) 
+            { 
+                return false; 
+            }
             if (target.Body.UserData is Submarine sub)
             {
                 Vector2 dir = item.body.LinearVelocity.LengthSquared() < 0.001f ?
@@ -835,6 +851,10 @@ namespace Barotrauma.Items.Components
             }
             else if (target.Body.UserData is Limb limb)
             {
+                if (!FriendlyFire && User != null && limb.character.IsFriendly(User))
+                {
+                    return false;
+                }
                 // when hitting limbs with piercing ammo, don't lose as much speed
                 if (MaxTargetsToHit > 1)
                 {
@@ -954,7 +974,8 @@ namespace Barotrauma.Items.Components
             {
                 item.body.LinearVelocity *= deflectedSpeedMultiplier;
             }
-            else if (   stickJoint == null && StickTarget == null &&
+            else if (   remainingHits <= 0 &&
+                        stickJoint == null && StickTarget == null &&
                         StickToStructures && target.Body.UserData is Structure ||
                         ((StickToLightTargets || target.Body.Mass > item.body.Mass * 0.5f) &&
                         (DoesStick ||

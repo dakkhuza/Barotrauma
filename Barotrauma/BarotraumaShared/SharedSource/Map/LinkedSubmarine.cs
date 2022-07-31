@@ -1,12 +1,11 @@
-﻿using Barotrauma.Items.Components;
+﻿using Barotrauma.Extensions;
+using Barotrauma.Items.Components;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Xml.Linq;
-using Barotrauma.IO;
-using Barotrauma.Extensions;
-using System.Collections.Immutable;
 
 namespace Barotrauma
 {
@@ -81,6 +80,8 @@ namespace Barotrauma
         }
 
         private XElement saveElement;
+
+        private Vector2? positionRelativeToMainSub;
 
         public override bool Linkable
         {
@@ -181,8 +182,8 @@ namespace Barotrauma
                 float scale = element.GetAttributeFloat("scale", prefab.Scale);
 
                 var rect = element.GetAttributeVector4("rect", Vector4.Zero);
-                rect.Z *= scale / prefab.Scale;
-                rect.W *= scale / prefab.Scale;
+                if (!prefab.ResizeHorizontal) { rect.Z *= scale / prefab.Scale; }
+                if (!prefab.ResizeVertical) { rect.W *= scale / prefab.Scale; }
 
                 points.Add(new Vector2(rect.X, rect.Y));
                 points.Add(new Vector2(rect.X + rect.Z, rect.Y));
@@ -202,7 +203,7 @@ namespace Barotrauma
             if (Screen.Selected == GameMain.SubEditorScreen)
             {
                 linkedSub = CreateDummy(submarine, element, pos, id);
-                linkedSub.saveElement = element;
+                linkedSub.saveElement = new XElement(element);
                 linkedSub.purchasedLostShuttles = false;
             }
             else
@@ -211,19 +212,24 @@ namespace Barotrauma
                 LevelData levelData = GameMain.GameSession?.Campaign?.NextLevel ?? GameMain.GameSession?.LevelData;
                 linkedSub = new LinkedSubmarine(submarine, id)
                 {
-                    purchasedLostShuttles = GameMain.GameSession?.GameMode is CampaignMode campaign && campaign.PurchasedLostShuttles,
-                    saveElement = element
+                    purchasedLostShuttles = 
+                        (GameMain.GameSession?.GameMode is CampaignMode campaign && campaign.PurchasedLostShuttles) || 
+                        element.GetAttributeBool("purchasedlostshuttle", false),
+                    saveElement = new XElement(element)
                 };
 
-                if (!string.IsNullOrWhiteSpace(levelSeed) && levelData != null &&
-                    levelData.Seed != levelSeed && !linkedSub.purchasedLostShuttles)
-                {
-                    linkedSub.loadSub = false;
-                }
-                else
+                bool levelMatches = string.IsNullOrWhiteSpace(levelSeed) || levelData == null || levelData.Seed == levelSeed;
+
+                //don't load a sub that was left in this level if we have a submarine switch pending
+                //to make sure it gets ignored during the submarine switch and item transfer (reloading and saving it during the switch makes it not considered "left behind")
+                if ((levelMatches || linkedSub.purchasedLostShuttles) && GameMain.GameSession?.Campaign?.PendingSubmarineSwitch == null)
                 {
                     linkedSub.loadSub = true;
                     linkedSub.rect.Location = MathUtils.ToPoint(pos);
+                }
+                else
+                {
+                    linkedSub.loadSub = false;
                 }
             }
 
@@ -253,6 +259,15 @@ namespace Barotrauma
             }            
         }
 
+        public void SetPositionRelativeToMainSub()
+        {
+            if (positionRelativeToMainSub.HasValue)
+            {
+                Sub.SetPosition(Submarine.WorldPosition + positionRelativeToMainSub.Value);
+            }
+            positionRelativeToMainSub = null;
+        }
+
         public override void OnMapLoaded()
         {
             if (!loadSub) { return; }
@@ -269,6 +284,8 @@ namespace Barotrauma
                 return;
             }
 
+            saveElement.Attribute("purchasedlostshuttle")?.Remove();
+
             IdRemap parentRemap = new IdRemap(Submarine.Info.SubmarineElement, Submarine.IdOffset);
             sub = Submarine.Load(info, false, parentRemap);
             sub.Info.SubmarineClass = Submarine.Info.SubmarineClass;
@@ -279,14 +296,14 @@ namespace Barotrauma
             if (worldPos != Vector2.Zero)
             {
                 if (GameMain.GameSession != null && GameMain.GameSession.MirrorLevel)
-                {                    
+                {
                     worldPos.X = GameMain.GameSession.LevelData.Size.X - worldPos.X;
                 }
                 sub.SetPosition(worldPos);
             }
             else
             {
-                sub.SetPosition(WorldPosition);                
+                sub.SetPosition(WorldPosition);
             }
 
             DockingPort linkedPort = null;
@@ -308,8 +325,29 @@ namespace Barotrauma
                 {
                     linkedPort = (FindEntityByID(originalLinkedToID) as Item)?.GetComponent<DockingPort>();
                 }
-                if (linkedPort == null) { return; }
             }
+                
+            if (linkedPort == null) 
+            {
+                if (worldPos == Vector2.Zero)
+                {
+                    Vector2 relativePos = saveElement.GetAttributeVector2("posrelativetomainsub", Vector2.Zero);
+                    if (relativePos != Vector2.Zero)
+                    {
+                        positionRelativeToMainSub = relativePos;
+                    }
+                    else
+                    {
+                        DebugConsole.ThrowError("Something went wrong when loading a linked submarine - the save didn't include a world position, a linked port or position relative to the main sub.");
+                    }
+                }
+                else
+                {
+                    sub.Submarine = Submarine;
+                }
+                return; 
+            }
+
             originalLinkedPort = linkedPort;
 
             ushort originalMyId = childRemap.GetOffsetId(originalMyPortID);
@@ -408,14 +446,22 @@ namespace Barotrauma
                     saveElement.Attribute("previewimage").Remove();
                 }
 
-                if (saveElement.Attribute("pos") != null) { saveElement.Attribute("pos").Remove(); }
-                saveElement.Add(new XAttribute("pos", XMLExtensions.Vector2ToString(Position - Submarine.HiddenSubPosition)));
-
-                var linkedPort = linkedTo.FirstOrDefault(lt => (lt is Item) && ((Item)lt).GetComponent<DockingPort>() != null);
-                if (linkedPort != null)
+                if (GameMain.GameSession?.GameMode is CampaignMode campaign && campaign.PurchasedLostShuttles)
                 {
-                    saveElement.Attribute("linkedto")?.Remove();
-                    saveElement.Add(new XAttribute("linkedto", linkedPort.ID));
+                    saveElement.SetAttributeValue("purchasedlostshuttle", true);
+                }
+
+                saveElement.SetAttributeValue("pos", XMLExtensions.Vector2ToString(Position - Submarine.HiddenSubPosition));
+
+                if (linkedTo.Any() || linkedToID.Any())
+                {
+                    var linkedPort = 
+                        linkedTo.FirstOrDefault(lt => (lt is Item item) && item.GetComponent<DockingPort>() != null) ?? 
+                        FindEntityByID(linkedToID.First()) as MapEntity;
+                    if (linkedPort != null)
+                    {
+                        saveElement.SetAttributeValue("linkedto", linkedPort.ID);
+                    }
                 }
             }
             else
@@ -424,15 +470,13 @@ namespace Barotrauma
                 sub.SaveToXElement(saveElement);
             }
 
-            saveElement.Attribute("originallinkedto")?.Remove();
-            saveElement.Add(new XAttribute("originallinkedto", originalLinkedPort != null ? originalLinkedPort.Item.ID : originalLinkedToID));
-            saveElement.Attribute("originalmyport")?.Remove();
-            saveElement.Add(new XAttribute("originalmyport", originalMyPortID));
+            saveElement.SetAttributeValue("originallinkedto", originalLinkedPort != null ? originalLinkedPort.Item.ID : originalLinkedToID);
+            saveElement.SetAttributeValue("originalmyport", originalMyPortID);
 
             if (sub != null)
             {
                 bool leaveBehind = false;
-                if (!sub.DockedTo.Contains(Submarine.MainSub))
+                if (sub.Submarine != null && !sub.DockedTo.Contains(sub.Submarine))
                 {
                     System.Diagnostics.Debug.Assert(Submarine.MainSub.AtEndExit || Submarine.MainSub.AtStartExit);
                     if (Submarine.MainSub.AtEndExit)
@@ -457,8 +501,9 @@ namespace Barotrauma
                 }
                 else
                 {
-                    if (saveElement.Attribute("location") != null) saveElement.Attribute("location").Remove();
-                    if (saveElement.Attribute("worldpos") != null) saveElement.Attribute("worldpos").Remove();
+                    if (saveElement.Attribute("location") != null) { saveElement.Attribute("location").Remove(); }
+                    if (saveElement.Attribute("worldpos") != null) { saveElement.Attribute("worldpos").Remove(); }
+                    saveElement.SetAttributeValue("posrelativetomainsub", XMLExtensions.Vector2ToString(sub.WorldPosition - Submarine.WorldPosition));
                 }
                 saveElement.SetAttributeValue("pos", XMLExtensions.Vector2ToString(Position - Submarine.HiddenSubPosition));
             }

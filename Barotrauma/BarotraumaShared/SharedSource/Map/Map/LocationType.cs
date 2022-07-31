@@ -88,27 +88,6 @@ namespace Barotrauma
         public int DailySpecialsCount { get; } = 1;
         public int RequestedGoodsCount { get; } = 1;
 
-        public List<StoreBalanceStatus> StoreBalanceStatuses { get; } = new List<StoreBalanceStatus>()
-        {
-            new StoreBalanceStatus(1.0f, 1.0f, Color.White),
-            new StoreBalanceStatus(0.5f, 0.75f, Color.Orange),
-            new StoreBalanceStatus(0.25f, 0.2f, Color.Red)
-        };
-
-        public struct StoreBalanceStatus
-        {
-            public float PercentageOfInitialBalance { get; }
-            public float SellPriceModifier { get; }
-            public Color Color { get; }
-
-            public StoreBalanceStatus(float percentage, float sellPriceModifier, Color color)
-            {
-                PercentageOfInitialBalance = percentage;
-                SellPriceModifier = sellPriceModifier;
-                Color = color;
-            }
-        }
-
         public override string ToString()
         {
             return $"LocationType (" + Identifier + ")";
@@ -134,15 +113,23 @@ namespace Barotrauma
             string teamStr = element.GetAttributeString("outpostteam", "FriendlyNPC");
             Enum.TryParse(teamStr, out OutpostTeam);
 
-            ContentPath nameFile = element.GetAttributeContentPath("namefile") ?? ContentPath.FromRaw(null, "Content/Map/locationNames.txt");
-            try
+            string[] rawNamePaths = element.GetAttributeStringArray("namefile", new string[] { "Content/Map/locationNames.txt" });
+            names = new List<string>();
+            foreach (string rawPath in rawNamePaths)
             {
-                names = File.ReadAllLines(nameFile.Value).ToList();
+                try
+                {
+                    var path = ContentPath.FromRaw(element.ContentPackage, rawPath.Trim());
+                    names.AddRange(File.ReadAllLines(path.Value).ToList());
+                }
+                catch (Exception e)
+                {
+                    DebugConsole.ThrowError($"Failed to read name file \"rawPath\" for location type \"{Identifier}\"!", e);
+                }
             }
-            catch (Exception e)
+            if (!names.Any())
             {
-                DebugConsole.ThrowError("Failed to read name file for location type \"" + Identifier + "\"!", e);
-                names = new List<string>() { "Name file not found" };
+                names.Add("ERROR: No names found");
             }
 
             string[] commonnessPerZoneStrs = element.GetAttributeStringArray("commonnessperzone", Array.Empty<string>());
@@ -208,18 +195,6 @@ namespace Barotrauma
                         RequestGoodPriceModifier = subElement.GetAttributeFloat("requestgoodpricemodifier", RequestGoodPriceModifier);
                         StoreInitialBalance = subElement.GetAttributeInt("initialbalance", StoreInitialBalance);
                         StorePriceModifierRange = subElement.GetAttributeInt("pricemodifierrange", StorePriceModifierRange);
-                        var balanceStatusElements = subElement.GetChildElements("balancestatus");
-                        if (balanceStatusElements.Any())
-                        {
-                            StoreBalanceStatuses.Clear();
-                            foreach (var balanceStatusElement in balanceStatusElements)
-                            {
-                                float percentage = balanceStatusElement.GetAttributeFloat("percentage", 1.0f);
-                                float modifier = balanceStatusElement.GetAttributeFloat("sellpricemodifier", 1.0f);
-                                Color color = balanceStatusElement.GetAttributeColor("color", Color.White);
-                                StoreBalanceStatuses.Add(new StoreBalanceStatus(percentage, modifier, color));
-                            }
-                        }
                         DailySpecialsCount = subElement.GetAttributeInt("dailyspecialscount", DailySpecialsCount);
                         RequestedGoodsCount = subElement.GetAttributeInt("requestedgoodscount", RequestedGoodsCount);
                         break;

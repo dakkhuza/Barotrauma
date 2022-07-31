@@ -20,7 +20,7 @@ namespace Barotrauma
         private RectTransform currentHighestParent;
         private List<RectTransform> parentHierarchy = new List<RectTransform>();
 
-        private bool selectMultiple;
+        private readonly bool selectMultiple;
 
         public bool Dropped { get; set; }
         
@@ -129,17 +129,19 @@ namespace Barotrauma
             }
         }
 
-        private List<object> selectedDataMultiple = new List<object>();
+        private readonly List<object> selectedDataMultiple = new List<object>();
         public IEnumerable<object> SelectedDataMultiple
         {
             get { return selectedDataMultiple; }
         }
 
-        private List<int> selectedIndexMultiple = new List<int>();
+        private readonly List<int> selectedIndexMultiple = new List<int>();
         public IEnumerable<int> SelectedIndexMultiple
         {
             get { return selectedIndexMultiple; }
         }
+
+        public bool MustSelectAtLeastOne;
 
         public LocalizedString Text
         {
@@ -160,6 +162,10 @@ namespace Barotrauma
                 listBox.ToolTip = value;
             }
         }
+
+        public GUIImage DropDownIcon => icon;
+
+        public Vector4 Padding => button.TextBlock.Padding;
                 
         public GUIDropDown(RectTransform rectT, LocalizedString text = null, int elementCount = 4, string style = "", bool selectMultiple = false, bool dropAbove = false, Alignment textAlignment = Alignment.CenterLeft) : base(style, rectT)
         {
@@ -183,7 +189,8 @@ namespace Barotrauma
             listBox = new GUIListBox(new RectTransform(new Point(Rect.Width, Rect.Height * MathHelper.Clamp(elementCount, 2, 10)), rectT, listAnchor, listPivot)
             { IsFixedSize = false }, style: null)
             {
-                Enabled = !selectMultiple
+                Enabled = !selectMultiple,
+                PlaySoundOnSelect = true,
             };
             if (!selectMultiple) { listBox.OnSelected = SelectItem; }           
             GUIStyle.Apply(listBox, "GUIListBox", this);
@@ -264,6 +271,12 @@ namespace Barotrauma
                     ToolTip = toolTip,
                     OnSelected = (GUITickBox tb) =>
                     {
+                        if (MustSelectAtLeastOne && selectedIndexMultiple.Count <= 1 && !tb.Selected)
+                        {
+                            tb.Selected = true;
+                            return false;
+                        }
+
                         List<LocalizedString> texts = new List<LocalizedString>();
                         selectedDataMultiple.Clear();
                         selectedIndexMultiple.Clear();

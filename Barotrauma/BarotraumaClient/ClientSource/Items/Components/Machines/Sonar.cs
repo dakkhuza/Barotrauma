@@ -938,7 +938,7 @@ namespace Barotrauma.Items.Components
                 DrawMarker(spriteBatch,
                     Level.Loaded.StartLocation.Name,
                     (Level.Loaded.StartOutpost != null ? "outpost" : "location").ToIdentifier(),
-                    Level.Loaded.StartLocation.Name,
+                    "startlocation",
                     Level.Loaded.StartExitPosition, transducerCenter,
                     displayScale, center, DisplayRadius);
             }
@@ -948,7 +948,7 @@ namespace Barotrauma.Items.Components
                 DrawMarker(spriteBatch,
                     Level.Loaded.EndLocation.Name,
                     (Level.Loaded.EndOutpost != null ? "outpost" : "location").ToIdentifier(),
-                    Level.Loaded.EndLocation.Name,
+                    "endlocation",
                     Level.Loaded.EndExitPosition, transducerCenter,
                     displayScale, center, DisplayRadius);
             }
@@ -985,7 +985,8 @@ namespace Barotrauma.Items.Components
                 missionIndex++;
             }
 
-            if (AllowUsingMineralScanner && useMineralScanner && CurrentMode == Mode.Active && MineralClusters != null)
+            if (AllowUsingMineralScanner && useMineralScanner && CurrentMode == Mode.Active && MineralClusters != null &&
+                (item.CurrentHull == null || !DetectSubmarineWalls))
             {
                 foreach (var c in MineralClusters)
                 {
@@ -1363,6 +1364,15 @@ namespace Barotrauma.Items.Components
                     CreateBlipsForLine(
                         new Vector2(pingSource.X - range, Level.Loaded.Size.Y),
                         new Vector2(pingSource.X + range, Level.Loaded.Size.Y),
+                        pingSource, transducerPos,
+                        pingRadius, prevPingRadius,
+                        250.0f, 150.0f, range, pingStrength, passive);
+                }
+                if (pingSource.Y - Level.Loaded.BottomPos < range)
+                {
+                    CreateBlipsForLine(
+                        new Vector2(pingSource.X - range, Level.Loaded.BottomPos),
+                        new Vector2(pingSource.X + range, Level.Loaded.BottomPos),
                         pingSource, transducerPos,
                         pingRadius, prevPingRadius,
                         250.0f, 150.0f, range, pingStrength, passive);

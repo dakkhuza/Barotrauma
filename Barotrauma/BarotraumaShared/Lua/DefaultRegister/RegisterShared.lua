@@ -1,13 +1,15 @@
-local Register = LuaSetup.Register
-local RegisterBarotrauma = LuaSetup.RegisterBarotrauma
+local Register = LuaSetup.LuaUserData.RegisterType
+local RegisterBarotrauma = LuaSetup.LuaUserData.RegisterTypeBarotrauma
 
 Register("System.TimeSpan")
+Register("System.Exception")
 
 RegisterBarotrauma("LuaByte")
 RegisterBarotrauma("LuaUShort")
 RegisterBarotrauma("LuaFloat")
 
-RegisterBarotrauma("Level+InterestingPosition")
+RegisterBarotrauma("Range`1[System.Single]")
+RegisterBarotrauma("Range`1[System.Int32]")
 
 RegisterBarotrauma("RichString")
 RegisterBarotrauma("Identifier")
@@ -15,13 +17,27 @@ RegisterBarotrauma("LanguageIdentifier")
 
 RegisterBarotrauma("Job")
 RegisterBarotrauma("JobPrefab")
-RegisterBarotrauma("Level")
+RegisterBarotrauma("JobVariant")
+
 RegisterBarotrauma("WayPoint")
+RegisterBarotrauma("Level")
+RegisterBarotrauma("LevelData")
+RegisterBarotrauma("Level+InterestingPosition")
+RegisterBarotrauma("LevelGenerationParams")
+RegisterBarotrauma("LevelObjectManager")
+RegisterBarotrauma("LevelObject")
+RegisterBarotrauma("LevelObjectPrefab")
+RegisterBarotrauma("LevelTrigger")
+RegisterBarotrauma("DestructibleLevelWall")
+RegisterBarotrauma("Biome")
+RegisterBarotrauma("Map")
 
 RegisterBarotrauma("Character")
 RegisterBarotrauma("CharacterPrefab")
 RegisterBarotrauma("CharacterInfo")
 RegisterBarotrauma("CharacterInfoPrefab")
+RegisterBarotrauma("CharacterInfo+HeadPreset")
+RegisterBarotrauma("CharacterInfo+HeadInfo")
 RegisterBarotrauma("CharacterHealth")
 RegisterBarotrauma("CharacterHealth+LimbHealth")
 RegisterBarotrauma("CharacterInventory")
@@ -33,16 +49,23 @@ RegisterBarotrauma("CharacterParams+HealthParams")
 RegisterBarotrauma("CharacterParams+ParticleParams")
 RegisterBarotrauma("CharacterParams+SoundParams")
 
-
 RegisterBarotrauma("Item")
 RegisterBarotrauma("DeconstructItem")
+RegisterBarotrauma("FabricationRecipe")
+RegisterBarotrauma("PreferredContainer")
+RegisterBarotrauma("SwappableItem")
+RegisterBarotrauma("FabricationRecipe+RequiredItemByIdentifier")
+RegisterBarotrauma("FabricationRecipe+RequiredItemByTag")
 RegisterBarotrauma("Submarine")
+
 RegisterBarotrauma("INetSerializableStruct")
 RegisterBarotrauma("Networking.Client")
 RegisterBarotrauma("Networking.TempClient")
 RegisterBarotrauma("Networking.NetworkConnection")
 RegisterBarotrauma("Networking.LidgrenConnection")
 RegisterBarotrauma("Networking.SteamP2PConnection")
+RegisterBarotrauma("Networking.VoipQueue")
+
 RegisterBarotrauma("AfflictionPrefab")
 RegisterBarotrauma("Affliction")
 RegisterBarotrauma("AnimController")
@@ -66,14 +89,18 @@ RegisterBarotrauma("ItemPrefab")
 RegisterBarotrauma("SerializableProperty")
 RegisterBarotrauma("InputType")
 
-RegisterBarotrauma("StatusEffect")
 RegisterBarotrauma("FireSource")
+
+RegisterBarotrauma("StatusEffect")
+
 RegisterBarotrauma("ContentPackageManager")
 RegisterBarotrauma("ContentPackageManager+PackageSource")
 RegisterBarotrauma("ContentPackageManager+EnabledPackages")
 RegisterBarotrauma("ContentPackage")
 RegisterBarotrauma("RegularPackage")
 RegisterBarotrauma("CorePackage")
+RegisterBarotrauma("ContentXElement")
+
 RegisterBarotrauma("SubmarineBody")
 RegisterBarotrauma("Explosion")
 RegisterBarotrauma("Networking.ServerSettings")
@@ -82,6 +109,7 @@ RegisterBarotrauma("Inventory")
 RegisterBarotrauma("ItemInventory")
 RegisterBarotrauma("Inventory+ItemSlot")
 RegisterBarotrauma("FireSource")
+RegisterBarotrauma("AutoItemPlacer")
 
 local componentsToRegister = { "DockingPort", "Door", "GeneticMaterial", "Growable", "Holdable", "LevelResource", "ItemComponent", "ItemLabel", "LightComponent", "Controller", "Deconstructor", "Engine", "Fabricator", "OutpostTerminal", "Pump", "Reactor", "Steering", "PowerContainer", "Projectile", "Repairable", "Rope", "Scanner", "ButtonTerminal", "ConnectionPanel", "CustomInterface", "MemoryComponent", "Terminal", "WifiComponent", "Wire", "TriggerComponent", "ElectricalDischarger", "EntitySpawnerComponent", "ProducedItem", "VineTile", "GrowthSideExtension", "IdCard", "MeleeWeapon", "Pickable", "AbilityItemPickingTime", "Propulsion", "RangedWeapon", "AbilityRangedWeapon", "RepairTool", "Sprayer", "Throwable", "ItemContainer", "AbilityItemContainer", "Ladder", "LimbPos", "AbilityDeconstructedItem", "AbilityItemCreationMultiplier", "AbilityItemDeconstructedInventory", "MiniMap", "OxygenGenerator", "Sonar", "SonarTransducer", "Vent", "NameTag", "Planter", "Powered", "PowerTransfer", "Quality", "RemoteController", "AdderComponent", "AndComponent", "ArithmeticComponent", "ColorComponent", "ConcatComponent", "Connection", "DelayComponent", "DivideComponent", "EqualsComponent", "ExponentiationComponent", "FunctionComponent", "GreaterComponent", "ModuloComponent", "MotionSensor", "MultiplyComponent", "NotComponent", "OrComponent", "OscillatorComponent", "OxygenDetector", "RegExFindComponent", "RelayComponent", "SignalCheckComponent", "SmokeDetector", "StringComponent", "SubtractComponent", "TrigonometricFunctionComponent", "WaterDetector", "XorComponent", "StatusHUD", "Turret", "Wearable",
 "GridInfo", "PowerSourceGroup"
@@ -94,6 +122,7 @@ end
 LuaUserData.MakeFieldAccessible(RegisterBarotrauma("Items.Components.CustomInterface"), "customInterfaceElementList")
 RegisterBarotrauma("Items.Components.CustomInterface+CustomInterfaceElement")
 
+RegisterBarotrauma("WearableSprite")
 
 RegisterBarotrauma("AIController")
 RegisterBarotrauma("EnemyAIController")
@@ -159,6 +188,8 @@ RegisterBarotrauma("PvPMode")
 RegisterBarotrauma("Mission")
 RegisterBarotrauma("CampaignMode")
 RegisterBarotrauma("CoOpMode")
+RegisterBarotrauma("MultiPlayerCampaign")
+RegisterBarotrauma("Radiation")
 
 RegisterBarotrauma("CampaignMetadata")
 RegisterBarotrauma("Wallet")
@@ -171,6 +202,7 @@ RegisterBarotrauma("LocationConnection")
 RegisterBarotrauma("LocationType")
 RegisterBarotrauma("LocationTypeChange")
 
+RegisterBarotrauma("DebugConsole")
 RegisterBarotrauma("DebugConsole+Command")
 
 RegisterBarotrauma("TextManager")
@@ -192,6 +224,8 @@ Register("System.Net.IPAddress")
 
 RegisterBarotrauma("Skill")
 RegisterBarotrauma("SkillPrefab")
+RegisterBarotrauma("SkillSettings")
+
 RegisterBarotrauma("TraitorMissionPrefab")
 RegisterBarotrauma("TraitorMissionResult")
 
@@ -211,6 +245,8 @@ RegisterBarotrauma("PrefabCollection`1[[Barotrauma.TalentPrefab]]")
 RegisterBarotrauma("PrefabCollection`1[[Barotrauma.TalentTree]]")
 RegisterBarotrauma("PrefabCollection`1[[Barotrauma.OrderPrefab]]")
 
+RegisterBarotrauma("PrefabSelector`1[[Barotrauma.SkillSettings]]")
+
 RegisterBarotrauma("Pair`2[[Barotrauma.JobPrefab],[System.Int32]]")
 
 RegisterBarotrauma("Range`1[System.Single]")
@@ -221,6 +257,14 @@ RegisterBarotrauma("SubmarineInfo")
 RegisterBarotrauma("MapCreatures.Behavior.BallastFloraBehavior")
 RegisterBarotrauma("MapCreatures.Behavior.BallastFloraBranch")
 
+RegisterBarotrauma("PetBehavior")
+
+RegisterBarotrauma("Decal")
+RegisterBarotrauma("DecalPrefab")
+RegisterBarotrauma("DecalManager")
+
+RegisterBarotrauma("PriceInfo")
+
 Register("Microsoft.Xna.Framework.Vector2")
 Register("Microsoft.Xna.Framework.Vector3")
 Register("Microsoft.Xna.Framework.Vector4")
@@ -228,3 +272,19 @@ Register("Microsoft.Xna.Framework.Color")
 Register("Microsoft.Xna.Framework.Point")
 Register("Microsoft.Xna.Framework.Rectangle")
 Register("Microsoft.Xna.Framework.Matrix")
+
+local friend = Register("Steamworks.Friend")
+
+LuaUserData.RemoveMember(friend, "InviteToGame")
+LuaUserData.RemoveMember(friend, "SendMessage")
+
+local workshopItem = Register("Steamworks.Ugc.Item")
+
+LuaUserData.RemoveMember(workshopItem, "Subscribe")
+LuaUserData.RemoveMember(workshopItem, "DownloadAsync")
+LuaUserData.RemoveMember(workshopItem, "Unsubscribe")
+LuaUserData.RemoveMember(workshopItem, "AddFavorite")
+LuaUserData.RemoveMember(workshopItem, "RemoveFavorite")
+LuaUserData.RemoveMember(workshopItem, "Vote")
+LuaUserData.RemoveMember(workshopItem, "GetUserVote")
+LuaUserData.RemoveMember(workshopItem, "Edit")

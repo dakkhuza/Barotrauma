@@ -1,7 +1,7 @@
 local defaultLib = {}
 
-local CreateStatic = LuaSetup.CreateStatic
-local CreateEnum = LuaUserData.CreateEnumTable
+local CreateStatic = LuaSetup.LuaUserData.CreateStatic
+local CreateEnum = LuaSetup.LuaUserData.CreateEnumTable
 
 local localizedStrings = {
     "LocalizedString", "LimitLString", "WrappedLString", "AddedPunctuationLString", "CapitalizeLString", "ConcatLString", "FallbackLString", "FormattedLString", "InputTypeLString", "JoinLString", "LowerLString", "RawLString", "ReplaceLString", "ServerMsgLString", "SplitLString", "TagLString", "TrimLString", "UpperLString", "StripRichTagsLString",
@@ -10,6 +10,14 @@ local localizedStrings = {
 for key, value in pairs(localizedStrings) do
 	defaultLib[value] = CreateStatic("Barotrauma." .. value, true)
 end
+
+defaultLib["Sounds.LowpassFilter"] = CreateStatic("Barotrauma.Sounds.LowpassFilter")
+defaultLib["Sounds.HighpassFilter"] = CreateStatic("Barotrauma.Sounds.HighpassFilter")
+defaultLib["Sounds.BandpassFilter"] = CreateStatic("Barotrauma.Sounds.BandpassFilter")
+defaultLib["Sounds.NotchFilter"] = CreateStatic("Barotrauma.Sounds.NotchFilter")
+defaultLib["Sounds.LowShelfFilter"] = CreateStatic("Barotrauma.Sounds.LowShelfFilter")
+defaultLib["Sounds.HighShelfFilter"] = CreateStatic("Barotrauma.Sounds.HighShelfFilter")
+defaultLib["Sounds.PeakFilter"] = CreateStatic("Barotrauma.Sounds.PeakFilter")
 
 defaultLib["Sprite"] = CreateStatic("Barotrauma.Sprite", true)
 defaultLib["PlayerInput"] = CreateStatic("Barotrauma.PlayerInput", true)
@@ -34,6 +42,9 @@ defaultLib["GUI"] = {
     NumberInput = CreateStatic("Barotrauma.GUINumberInput", true),
     MessageBox = CreateStatic("Barotrauma.GUIMessageBox", true),
     ColorPicker = CreateStatic("Barotrauma.GUIColorPicker", true),
+    ProgressBar = CreateStatic("Barotrauma.GUIProgressBar", true),
+    CustomComponent = CreateStatic("Barotrauma.GUICustomComponent", true),
+    ScissorComponent = CreateStatic("Barotrauma.GUIScissorComponent", true),
 
     Screen = CreateStatic("Barotrauma.Screen"),
 

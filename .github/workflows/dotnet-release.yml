@@ -16,7 +16,10 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v1
       with:
-        dotnet-version: 5.0.x
+        include-prerelease: true
+        dotnet-version: |
+          6.0.x
+          5.0.x
     - name: Restore dependencies
       run: dotnet restore LinuxSolution.sln
     - name: Build
@@ -41,7 +44,7 @@ jobs:
 
       
     - name: Archive Windows Release
-      uses: thedoctor0/zip-release@master
+      uses: thedoctor0/zip-release@main
       with:
         type: 'zip'
         filename: 'barotrauma_lua_windows.zip'
@@ -49,7 +52,7 @@ jobs:
         directory: 'Barotrauma/bin/ReleaseWindows/netcoreapp3.1/win-x64/publish'
         
     - name: Archive Linux Release
-      uses: thedoctor0/zip-release@master
+      uses: thedoctor0/zip-release@main
       with:
         type: 'zip'
         filename: 'barotrauma_lua_linux.zip'
@@ -57,7 +60,7 @@ jobs:
         directory: 'Barotrauma/bin/ReleaseLinux/netcoreapp3.1/linux-x64/publish'
         
     - name: Archive Mac Release
-      uses: thedoctor0/zip-release@master
+      uses: thedoctor0/zip-release@main
       with:
         type: 'zip'
         filename: 'barotrauma_lua_mac.zip'

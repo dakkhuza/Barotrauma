@@ -1,17 +1,13 @@
-﻿using Microsoft.Xna.Framework;
+﻿using Barotrauma.Extensions;
+using Barotrauma.IO;
+using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.ComponentModel;
-using System.Globalization;
-using Barotrauma.IO;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
-using System.Xml;
-using System.Xml.Linq;
-using Barotrauma.Extensions;
 
 namespace Barotrauma.Networking
 {
@@ -37,6 +33,12 @@ namespace Barotrauma.Networking
         Roleplay = 2,
         Rampage = 3,
         SomethingDifferent = 4
+    }
+
+    internal enum LootedMoneyDestination
+    {
+        Bank,
+        Wallet
     }
 
     partial class ServerSettings : ISerializableEntity
@@ -385,7 +387,7 @@ namespace Barotrauma.Networking
         public const int MaxExtraCargoItemTypes = 20;
         public Dictionary<ItemPrefab, int> ExtraCargo { get; private set; }
 
-        public HashSet<string> HiddenSubs { get; private set; }
+        public HashSet<string> HiddenSubs { get; set; }
 
         private float selectedLevelDifficulty;
         private string password;
@@ -897,21 +899,13 @@ namespace Barotrauma.Networking
             private set;
         }
 
-        [Serialize(true, IsPropertySaveable.Yes)]
-        public bool RadiationEnabled
-        {
-            get;
-            set;
-        }
+        [Serialize(LootedMoneyDestination.Bank, IsPropertySaveable.Yes)]
+        public LootedMoneyDestination LootedMoneyDestination { get; set; }
 
-        private int maxMissionCount = CampaignSettings.DefaultMaxMissionCount;
+        [Serialize(999999, IsPropertySaveable.Yes)]
+        public int MaximumMoneyTransferRequest { get; set; }
 
-        [Serialize(CampaignSettings.DefaultMaxMissionCount, IsPropertySaveable.Yes)]
-        public int MaxMissionCount 
-        {
-            get { return maxMissionCount; }
-            set { maxMissionCount = MathHelper.Clamp(value, CampaignSettings.MinMissionCountLimit, CampaignSettings.MaxMissionCountLimit); }            
-        }
+        public CampaignSettings CampaignSettings { get; set; } = CampaignSettings.Empty;
 
         private bool allowSubVoting;
         //Don't serialize: the value is set based on SubSelectionMode

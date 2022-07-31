@@ -1,10 +1,9 @@
-﻿using Barotrauma.Networking;
+﻿using Barotrauma.MapCreatures.Behavior;
+using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
 using System;
 using System.Globalization;
 using System.Linq;
-using System.Xml.Linq;
-using Barotrauma.MapCreatures.Behavior;
 
 namespace Barotrauma.Items.Components
 {
@@ -24,7 +23,10 @@ namespace Barotrauma.Items.Components
                 if (value == hijacked) { return; }
                 hijacked = value;
 #if SERVER
-                item.CreateServerEvent(this);
+                if (!Submarine.Unloading)
+                {
+                    item.CreateServerEvent(this);
+                }
 #endif
             }
         }
@@ -140,9 +142,8 @@ namespace Barotrauma.Items.Components
             //less effective when in a bad condition
             currFlow *= MathHelper.Lerp(0.5f, 1.0f, item.Condition / item.MaxCondition);
 
-            item.CurrentHull.WaterVolume += currFlow * deltaTime * Timing.FixedUpdateRate;
+            item.CurrentHull.WaterVolume += currFlow * deltaTime * Timing.FixedUpdateRate; 
             if (item.CurrentHull.WaterVolume > item.CurrentHull.Volume) { item.CurrentHull.Pressure += 30.0f * deltaTime; }
-
         }
 
         public void InfectBallast(Identifier identifier, bool allowMultiplePerShip = false)

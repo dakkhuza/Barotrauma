@@ -214,7 +214,7 @@ namespace Barotrauma.MapCreatures.Behavior
         [Serialize(400, IsPropertySaveable.Yes, "How much health the root has.")]
         public int RootHealth { get; set; }
 
-        [Serialize(0.0005f, IsPropertySaveable.Yes, "How fast the root's health regenerates per each grown branch.")]
+        [Serialize(0.00025f, IsPropertySaveable.Yes, "How fast the root's health regenerates per each grown branch.")]
         public float HealthRegenPerBranch { get; set; }
 
         [Serialize(30, IsPropertySaveable.Yes, "How far away from the root branches can regenerate health (in number of branches). The amount of regen decreases lineary further from the root.")]
@@ -308,6 +308,8 @@ namespace Barotrauma.MapCreatures.Behavior
         private BallastFloraBranch? root;
         private readonly List<Body> bodies = new List<Body>();
 
+        private bool isDead;
+
         public readonly BallastFloraStateMachine StateMachine;
 
         public int GrowthWarps;
@@ -399,16 +401,18 @@ namespace Barotrauma.MapCreatures.Behavior
                     new XAttribute("pos", XMLExtensions.Vector2ToString(branch.Position)),
                     new XAttribute("ID", branch.ID),
                     new XAttribute("isroot", branch.IsRoot),
+                    new XAttribute("isrootgrowth", branch.IsRootGrowth),
                     new XAttribute("health", branch.Health.ToString("G", CultureInfo.InvariantCulture)),
                     new XAttribute("maxhealth", branch.MaxHealth.ToString("G", CultureInfo.InvariantCulture)),
                     new XAttribute("sides", (int)branch.Sides),
-                    new XAttribute("blockedsides", (int)branch.BlockedSides));
+                    new XAttribute("blockedsides", (int)branch.BlockedSides),
+                    new XAttribute("tile", (int)branch.Type));
 
                 if (branch.ClaimedItem != null)
                 {
                     be.Add(new XAttribute("claimed", (int)(branch.ClaimedItem?.ID ?? -1)));
                 }
-                if (branch.ParentBranch != null)
+                if (branch.ParentBranch != null && !branch.ParentBranch.Removed)
                 {
                     be.Add(new XAttribute("parentbranch", (int)(branch.ParentBranch?.ID ?? -1)));
                 }
@@ -457,16 +461,34 @@ namespace Barotrauma.MapCreatures.Behavior
 
             foreach ((BallastFloraBranch branch, int parentBranchId) in branches)
             {
-                if (parentBranchId > -1 && parentBranchId < Branches.Count)
+                if (parentBranchId > -1)
                 {
-                    branch.ParentBranch = Branches[parentBranchId];
+                    var parentBranch = Branches.Find(b => b.ID == parentBranchId);
+                    if (parentBranch == null)
+                    {
+                        DebugConsole.AddWarning($"Error while loading ballast flora: couldn't find a parent branch with the ID {parentBranchId}");
+                    }
+                    else
+                    {
+                        branch.ParentBranch = parentBranch;
+                    }
                 }
+            }
+
+            if (root == null)
+            {
+                Branches.ForEach(b => b.DisconnectedFromRoot = true);
+            }
+            else
+            {
+                CheckDisconnectedFromRoot();
             }
 
             void LoadBranch(XElement branchElement, IdRemap idRemap)
             {
                 Vector2 pos = branchElement.GetAttributeVector2("pos", Vector2.Zero);
                 bool isRoot = branchElement.GetAttributeBool("isroot", false);
+                bool isRootGrowth = branchElement.GetAttributeBool("isrootgrowth", false);
                 int flowerConfig = getInt("flowerconfig");
                 int leafconfig = getInt("leafconfig");
                 int id = getInt("ID");
@@ -476,15 +498,17 @@ namespace Barotrauma.MapCreatures.Behavior
                 int blockedSides = getInt("blockedsides");
                 int claimedId = branchElement.GetAttributeInt("claimed", -1);
                 int parentBranchId = branchElement.GetAttributeInt("parentbranch", -1);
+                VineTileType type = (VineTileType)branchElement.GetAttributeInt("tile", 0);
 
-                BallastFloraBranch newBranch = new BallastFloraBranch(this, null, pos, VineTileType.CrossJunction, FoliageConfig.Deserialize(flowerConfig), FoliageConfig.Deserialize(leafconfig))
+                BallastFloraBranch newBranch = new BallastFloraBranch(this, null, pos, type, FoliageConfig.Deserialize(flowerConfig), FoliageConfig.Deserialize(leafconfig))
                 {
                     ID = id,
                     Health = health,
                     MaxHealth = maxhealth,
-                    Sides = (TileSide) sides,
-                    BlockedSides = (TileSide) blockedSides,
-                    IsRoot = isRoot
+                    Sides = (TileSide)sides,
+                    BlockedSides = (TileSide)blockedSides,
+                    IsRoot = isRoot,
+                    IsRootGrowth = isRootGrowth
                 };
                 branches.Add((newBranch, parentBranchId));
 
@@ -649,17 +673,20 @@ namespace Barotrauma.MapCreatures.Behavior
             toBeRemoved.Clear();
             foreach (BallastFloraBranch branch in Branches)
             {
-                if (branch.ParentBranch != null && (branch.ParentBranch.DisconnectedFromRoot || branch.ParentBranch.Health <= 0.0f))
+                if (!branch.IsRoot)
                 {
-                    float speed = MathHelper.Lerp(5.0f, 0.1f, branch.ParentBranch.Health / branch.ParentBranch.MaxHealth);
-                    DamageBranch(branch, speed * speed * deltaTime, AttackType.CutFromRoot);
+                    if (branch.ParentBranch == null || branch.ParentBranch.DisconnectedFromRoot || branch.ParentBranch.Health <= 0.0f)
+                    {
+                        float parentHealth = branch.ParentBranch == null ? 0.0f : branch.ParentBranch.Health / branch.ParentBranch.MaxHealth;
+                        float speed = MathHelper.Lerp(5.0f, 0.1f, parentHealth);
+                        DamageBranch(branch, speed * speed * deltaTime, AttackType.CutFromRoot);
+                    }
                 }
                 if (branch.Health <= 0.0f)
                 {
                     if (branch.ClaimedItem != null)
                     {
                         RemoveClaim(branch.ClaimedItem);
-                        branch.ClaimedItem = null;
                     }
 
                     branch.RemoveTimer -= deltaTime;
@@ -767,7 +794,8 @@ namespace Barotrauma.MapCreatures.Behavior
                 MaxHealth = RootHealth,
                 Health = RootHealth,
                 IsRoot = true,
-                CurrentHull = Parent
+                CurrentHull = Parent,
+                ID = CreateID()
             };
             
             Branches.Add(root);
@@ -992,14 +1020,6 @@ namespace Barotrauma.MapCreatures.Behavior
         public void DamageBranch(BallastFloraBranch branch, float amount, AttackType type, Character? attacker = null)
         {
             float damage = amount;
-            if (damage > 0)
-            {
-                damage = Math.Min(damage, branch.Health);
-            }
-            else
-            {
-                damage = Math.Max(damage, branch.Health - branch.MaxHealth);
-            }
 
             if (type != AttackType.Other && type != AttackType.CutFromRoot)
             {
@@ -1058,6 +1078,14 @@ namespace Barotrauma.MapCreatures.Behavior
                 }
             }
 
+            if (damage > 0)
+            {
+                damage = Math.Min(damage, branch.Health);
+            }
+            else
+            {
+                damage = Math.Max(damage, branch.Health - branch.MaxHealth);
+            }
             branch.Health -= damage;
 
 #if SERVER
@@ -1071,6 +1099,25 @@ namespace Barotrauma.MapCreatures.Behavior
             }
         }
 
+        private void CheckDisconnectedFromRoot()
+        {
+            bool foundDisconnected;
+            do
+            {
+                foundDisconnected = false;
+                foreach (BallastFloraBranch branch in Branches)
+                {
+                    if (branch.ParentBranch == null || branch.DisconnectedFromRoot) { continue; }
+                    if (branch.ParentBranch.Removed || branch.ParentBranch.DisconnectedFromRoot)
+                    {
+                        branch.DisconnectedFromRoot = true;
+                        foundDisconnected = true;
+                    }
+                }
+            } while (foundDisconnected);
+
+        }
+
         public void RemoveBranch(BallastFloraBranch branch)
         {
             bool isClient = GameMain.NetworkMember != null && GameMain.NetworkMember.IsClient;
@@ -1081,20 +1128,7 @@ namespace Barotrauma.MapCreatures.Behavior
             Branches.Remove(branch);
             branch.Removed = true;
 
-            bool foundDisconnected = false;
-            do
-            {
-                foundDisconnected = false;
-                foreach (BallastFloraBranch otherBranch in Branches)
-                {
-                    if (otherBranch.ParentBranch == null || otherBranch.DisconnectedFromRoot) { continue; }
-                    if (otherBranch.ParentBranch.Removed || otherBranch.ParentBranch.DisconnectedFromRoot)
-                    {
-                        otherBranch.DisconnectedFromRoot = true;
-                        foundDisconnected = true;
-                    }
-                }
-            } while (foundDisconnected);
+            CheckDisconnectedFromRoot();
 
             bodies.ForEachMod(body =>
             {
@@ -1148,7 +1182,7 @@ namespace Barotrauma.MapCreatures.Behavior
                 return;
             }
 #if SERVER
-            if (!wasRemoved)
+            if (!wasRemoved && Parent != null && !Parent.Removed)
             {
                 CreateNetworkMessage(new BranchRemoveEventData(branch));
             }
@@ -1164,6 +1198,14 @@ namespace Barotrauma.MapCreatures.Behavior
 
             ClaimedTargets.Remove(item);
             item.Infector = null;
+
+            foreach (var branch in Branches)
+            {
+                if (branch.ClaimedItem == item)
+                {
+                    branch.ClaimedItem = null;
+                }
+            }
 
             ClaimedJunctionBoxes.ForEachMod(jb =>
             {
@@ -1181,25 +1223,37 @@ namespace Barotrauma.MapCreatures.Behavior
                 }
             });
 #if SERVER
-            CreateNetworkMessage(new InfectEventData(item, InfectEventData.InfectState.No, null));
+            if (!item.Removed && Parent != null && !Parent.Removed)
+            {
+                CreateNetworkMessage(new InfectEventData(item, InfectEventData.InfectState.No, null));
+            }
 #endif
         }
 
         public void Kill()
         {
+            isDead = true;
+
             foreach (var branch in Branches)
             {
                 branch.DisconnectedFromRoot = true;
             }
 
-            foreach (Item target in ClaimedTargets)
+            foreach (Item target in ClaimedTargets.ToList())
             {
+                RemoveClaim(target);
                 target.Infector = null;
             }
+            Debug.Assert(ClaimedTargets.Count == 0);
+            Debug.Assert(ClaimedJunctionBoxes.Count == 0);
+            Debug.Assert(ClaimedBatteries.Count == 0);
 
             StateMachine?.State?.Exit();
 #if SERVER
-            CreateNetworkMessage(new KillEventData());
+            if (Parent != null && !Parent.Removed)
+            {
+                CreateNetworkMessage(new KillEventData());
+            }
 #endif
         }
 
@@ -1220,8 +1274,11 @@ namespace Barotrauma.MapCreatures.Behavior
             }
 
             _entityList.Remove(this);
-#if SERVER
-            CreateNetworkMessage(new RemoveEventData());
+#if SERVER            
+            if (Parent != null && !Parent.Removed)
+            {
+                CreateNetworkMessage(new RemoveEventData());
+            }
 #endif
         }
 
