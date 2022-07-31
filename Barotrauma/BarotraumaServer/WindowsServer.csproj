@@ -66,6 +66,8 @@
     <Content Remove="..\BarotraumaShared\**\*.cs" />
     <Content Remove="..\BarotraumaShared\**\*.props" />
     <Compile Include="..\BarotraumaShared\**\*.cs" />
+    <Compile Remove="..\BarotraumaShared\MoreLevelContent\Shared\Patches\**" />
+    <Compile Remove="..\BarotraumaShared\MoreLevelContent\Shared\Utils\PatchBase.cs" />
     <Compile Remove="..\BarotraumaShared\SharedSource\Cs\CsHook.cs" />
     <Compile Remove="..\BarotraumaShared\SharedSource\Lua\LuaClasses\LuaHook.cs" />
     <Content Remove="DedicatedServer.exe" />
@@ -98,10 +100,6 @@
     <Reference Include="MoonSharp.Interpreter">
       <HintPath>..\..\Libraries\MoonSharp.Interpreter.dll</HintPath>
     </Reference>
-  </ItemGroup>
-  
-  <ItemGroup>
-    <Folder Include="InLevelOutposts\RelocateRuins\" />
   </ItemGroup>
 
   <!-- Sourced from https://stackoverflow.com/a/45248069 -->

@@ -128,6 +128,7 @@
     <ProjectReference Include="..\..\Libraries\SharpFont\Source\SharpFont\SharpFont.NetStandard.csproj" AdditionalProperties="Configuration=Debug" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Remove="..\BarotraumaShared\MoreLevelContent\Shared\Config\Config.cs" />
     <Compile Remove="..\BarotraumaShared\SharedSource\Lua\NLuaSetup.cs" />
   </ItemGroup>
 

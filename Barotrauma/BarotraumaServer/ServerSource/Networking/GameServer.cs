@@ -386,7 +386,7 @@ namespace Barotrauma.Networking
                         character.KillDisconnectedTimer += deltaTime;
                         character.SetStun(1.0f);
                     }
-
+                    ;
                     Client owner = connectedClients.Find(c => (c.Character == null || c.Character == character) && c.EndpointMatches(character.OwnerClientEndPoint));
 
                     if ((OwnerConnection == null || owner?.Connection != OwnerConnection) && character.KillDisconnectedTimer > serverSettings.KillDisconnectedTime)
