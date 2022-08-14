@@ -3256,8 +3256,7 @@ namespace Barotrauma
                 }
             });
 
-            const string CMD_CL_LUA = "cl_lua";
-            commands.Add(new Command(CMD_CL_LUA, $"{CMD_CL_LUA}: runs a string on the client", (string[] args) =>
+            commands.Add(new Command("cl_lua", "lua_cl: runs a string on the client", (string[] args) =>
             {
                 if (GameMain.Client != null && !GameMain.Client.HasPermission(ClientPermissions.ConsoleCommands))
                 {
@@ -3271,12 +3270,10 @@ namespace Barotrauma
                 }
                 catch(Exception ex)
                 {
-                    GameMain.LuaCs.HandleException(ex, LuaCsMessageOrigin.LuaMod);
+                    GameMain.LuaCs.HandleException(ex);
                 }
             }));
-
-            const string CMD_CL_CS = "cl_cs";
-            commands.Add(new Command(CMD_CL_CS, $"{CMD_CL_CS}: runs a string on the client", (string[] args) =>
+            commands.Add(new Command("cl_cs", "cs_cl: runs a string on the client", (string[] args) =>
             {
                 if (LuaCsSetup.GetPackage("CsForBarotrauma", false, true) == null) { return; }
 

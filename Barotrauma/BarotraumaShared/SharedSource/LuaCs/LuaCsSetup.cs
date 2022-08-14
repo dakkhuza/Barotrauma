@@ -12,7 +12,6 @@ using System.Runtime.CompilerServices;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
-using LuaCsCompatPatchFunc = Barotrauma.LuaCsPatch;
 
 [assembly: InternalsVisibleTo(Barotrauma.CsScriptBase.CsScriptAssembly, AllInternalsVisible = true)]
 [assembly: InternalsVisibleTo(Barotrauma.CsScriptBase.CsOneTimeScriptAssembly, AllInternalsVisible = true)]
@@ -24,18 +23,6 @@ namespace Barotrauma
 
 		public LuaCsSetupConfig() { }
 	}
-
-    internal delegate void LuaCsMessageLogger(string prefix, object o);
-
-    internal delegate void LuaCsExceptionHandler(Exception ex, LuaCsMessageOrigin origin);
-
-    internal enum LuaCsMessageOrigin
-    {
-        LuaCs,
-        Unknown,
-        LuaMod,
-        CSharpMod,
-    }
 
 	partial class LuaCsSetup
 	{
@@ -68,7 +55,7 @@ namespace Barotrauma
 		/// </summary>
 		public void RecreateCsScript()
         {
-			CsScript = new CsScriptRunner(CsScript.setup);
+			GameMain.LuaCs.CsScript = new CsScriptRunner(GameMain.LuaCs.CsScript.setup);
 			lua.Globals["CsScript"] = CsScript;
 		}
 
@@ -89,10 +76,7 @@ namespace Barotrauma
 
 		public LuaCsSetup()
 		{
-            MessageLogger = DefaultMessageLogger;
-			ExceptionHandler = DefaultExceptionHandler;
-
-            Hook = new LuaCsHook(this);
+			Hook = new LuaCsHook();
 			ModStore = new LuaCsModStore();
 
 			Game = new LuaGame();
@@ -152,141 +136,123 @@ namespace Barotrauma
 			return null;
 		}
 
-        private void DefaultExceptionHandler(Exception ex, LuaCsMessageOrigin origin)
+		public enum ExceptionType
         {
-            switch (ex)
-            {
-                case NetRuntimeException netRuntimeException:
-                    if (netRuntimeException.DecoratedMessage == null)
-                    {
-                        PrintError(netRuntimeException, origin);
-                    }
-                    else
-                    {
-                        // FIXME: netRuntimeException.ToString() doesn't print the InnerException's stack trace...
-                        PrintError($"{netRuntimeException.DecoratedMessage}: {netRuntimeException}", origin);
-                    }
-                    break;
-                case InterpreterException interpreterException:
-                    if (interpreterException.DecoratedMessage == null)
-                    {
-                        PrintError(interpreterException, origin);
-                    }
-                    else
-                    {
-                        PrintError(interpreterException.DecoratedMessage, origin);
-                    }
-                    break;
-                default:
-                    var msg = ex.StackTrace != null
-                        ? ex.ToString()
-                        : $"{ex}\n{Environment.StackTrace}";
-                    PrintError(msg, origin);
-                    break;
-            }
+			Lua,
+			CSharp,
+			Both
         }
+		public void HandleException(Exception ex, string extra = "", ExceptionType exceptionType = ExceptionType.Lua)
+		{
+			if (!string.IsNullOrWhiteSpace(extra))
+				if (exceptionType == ExceptionType.Lua) PrintError(extra);
+				else if (exceptionType == ExceptionType.CSharp) PrintCsError(extra);
+				else PrintBothError(extra);
 
-        internal LuaCsExceptionHandler ExceptionHandler { get; set; }
+			if (ex is NetRuntimeException netRuntimeException)
+			{
+				if (netRuntimeException.DecoratedMessage == null)
+				{
+					PrintError(netRuntimeException);
+				}
+				else
+				{
+					PrintError(netRuntimeException.DecoratedMessage + ": " + netRuntimeException.ToString());
+				}
+			}
+			else if (ex is InterpreterException interpreterException)
+			{
+				if (interpreterException.DecoratedMessage == null)
+				{
+					PrintError(interpreterException);
+				}
+				else
+				{
+					PrintError(interpreterException.DecoratedMessage);
+				}
+			}
+			else
+			{
+				string msg = ex.StackTrace != null
+					? ex.ToString()
+					: $"{ex}\n{Environment.StackTrace}";
 
+				if (exceptionType == ExceptionType.Lua) { PrintError(msg); }
+				else if (exceptionType == ExceptionType.CSharp) { PrintCsError(msg); }
+				else { PrintBothError(msg); }
+			}
+		}
 
-        internal void HandleException(Exception ex, LuaCsMessageOrigin origin)
+		private static void PrintErrorBase(string prefix, object message, string empty)
         {
-            this.ExceptionHandler?.Invoke(ex, origin);
-        }
+			if (message == null) { message = empty; }
+			string str = message.ToString();
 
-        private static void PrintErrorBase(string prefix, object message, string empty)
-        {
-            message ??= empty;
-            var str = message.ToString();
+			for (int i = 0; i < str.Length; i += 1024)
+			{
+				string subStr = str.Substring(i, Math.Min(1024, str.Length - i));
 
-            for (int i = 0; i < str.Length; i += 1024)
-            {
-                var subStr = str.Substring(i, Math.Min(1024, str.Length - i));
+				string errorMsg = subStr;
+				if (i == 0) errorMsg = prefix + errorMsg;
 
-                var errorMsg = subStr;
-                if (i == 0) errorMsg = prefix + errorMsg;
-
-                DebugConsole.ThrowError(errorMsg);
+				DebugConsole.ThrowError(errorMsg);
 
 #if SERVER
-                if (GameMain.Server != null)
-                {
-                    foreach (var c in GameMain.Server.ConnectedClients)
-                    {
-                        GameMain.Server.SendDirectChatMessage(ChatMessage.Create("", errorMsg, ChatMessageType.Console, null, textColor: Color.Red), c);
-                    }
+				if (GameMain.Server != null)
+				{
+					foreach (var c in GameMain.Server.ConnectedClients)
+					{
+						GameMain.Server.SendDirectChatMessage(ChatMessage.Create("", errorMsg, ChatMessageType.Console, null, textColor: Color.Red), c);
+					}
 
-                    GameServer.Log(errorMsg, ServerLog.MessageType.Error);
-                }
+					GameServer.Log(errorMsg, ServerLog.MessageType.Error);
+				}
 #endif
-            }
-        }
+			}
+		}
 
 #if SERVER
-        private const string LOG_PREFIX = "SV";
+		public void PrintError(object message) => PrintErrorBase("[SV LUA ERROR] ", message, "nil");
+		public static void PrintCsError(object message) => PrintErrorBase("[SV CS ERROR] ", message, "Null");
+		public static void PrintBothError(object message) => PrintErrorBase("[SV ERROR] ", message, "Null");
 #else
-        private const string LOG_PREFIX = "CL";
+		public void PrintError(object message) => PrintErrorBase("[CL LUA ERROR] ", message, "nil");
+		public static void PrintCsError(object message) => PrintErrorBase("[CL CS ERROR] ", message, "Null");
+		public static void PrintBothError(object message) => PrintErrorBase("[CL ERROR] ", message, "Null");
 #endif
 
-        // TODO: deprecate this (in an effort to get rid of as much global state as possible)
-        public void PrintError(object o, LuaCsMessageOrigin origin)
+		private static void PrintMessageBase(string prefix, object message, string empty)
         {
-            switch (origin)
-            {
-                case LuaCsMessageOrigin.LuaCs:
-                    PrintGenericError(o);
-                    break;
-                case LuaCsMessageOrigin.LuaMod:
-                    PrintLuaError(o);
-                    break;
-                case LuaCsMessageOrigin.CSharpMod:
-                    PrintCsError(o);
-                    break;
-            }
-        }
+			if (message == null) { message = empty; }
+			string str = message.ToString();
 
-        private static void PrintLuaError(object o) => PrintErrorBase($"[{LOG_PREFIX} LUA ERROR] ", o, "nil");
+			for (int i = 0; i < str.Length; i += 1024)
+			{
+				string subStr = str.Substring(i, Math.Min(1024, str.Length - i));
 
-        // TODO: deprecate this
-        // XXX: this is only public so that we don't break backward compat with C# mods
-        public static void PrintCsError(object o) => PrintErrorBase($"[{LOG_PREFIX} CS ERROR] ", o, "Null");
-
-        private static void PrintGenericError(object o) => PrintErrorBase($"[{LOG_PREFIX} ERROR] ", o, "Null");
-
-        internal LuaCsMessageLogger MessageLogger { get; set; }
-
-        private static void DefaultMessageLogger(string prefix, object o)
-        {
-            var message = o.ToString();
-            for (int i = 0; i < message.Length; i += 1024)
-            {
-                var subStr = message.Substring(i, Math.Min(1024, message.Length - i));
 
 #if SERVER
-                if (GameMain.Server != null)
-                {
-                    foreach (var c in GameMain.Server.ConnectedClients)
-                    {
-                        GameMain.Server.SendDirectChatMessage(ChatMessage.Create("", subStr, ChatMessageType.Console, null, textColor: Color.MediumPurple), c);
-                    }
+				if (GameMain.Server != null)
+				{
+					foreach (var c in GameMain.Server.ConnectedClients)
+					{
+						GameMain.Server.SendDirectChatMessage(ChatMessage.Create("", subStr, ChatMessageType.Console, null, textColor: Color.MediumPurple), c);
+					}
 
-                    GameServer.Log(prefix + subStr, ServerLog.MessageType.ServerMessage);
-                }
+					GameServer.Log(prefix + subStr, ServerLog.MessageType.ServerMessage);
+				}
 #endif
-            }
+			}
 
 #if SERVER
-            DebugConsole.NewMessage(message.ToString(), Color.MediumPurple);
+			DebugConsole.NewMessage(message.ToString(), Color.MediumPurple);
 #else
-            DebugConsole.NewMessage(message.ToString(), Color.Purple);
+			DebugConsole.NewMessage(message.ToString(), Color.Purple);
 #endif
-        }
-
-        private void PrintMessageBase(string prefix, object message, string empty) => MessageLogger?.Invoke(prefix, message ?? empty);
-        internal void PrintMessage(object message) => PrintMessageBase("[LuaCs] ", message, "nil");
-
-        // TODO: deprecate this (in an effort to get rid of as much global state as possible)
-        public static void PrintCsMessage(object message) => GameMain.LuaCs.PrintMessage(message);
+		}
+		private void PrintMessage(object message) => PrintMessageBase("[LUA] ", message, "nil");
+		public static void PrintCsMessage(object message) => PrintMessageBase("[CS] ", message, "Null");
+		public static void PrintLogMessage(object message) => PrintMessageBase("[LuaCs LOG] ", message, "Null");
 
 		private DynValue DoFile(string file, Table globalContext = null, string codeStringFriendly = null)
 		{
@@ -318,17 +284,17 @@ namespace Barotrauma
 			return lua.LoadFile(file, globalContext, codeStringFriendly);
 		}
 
-		public DynValue CallLuaFunction(object function, params object[] args)
+		public object CallLuaFunction(object function, params object[] arguments)
 		{
 			lock (lua)
 			{
 				try
 				{
-					return lua.Call(function, args);
+					return lua.Call(function, arguments);
 				}
 				catch (Exception e)
 				{
-					HandleException(e, LuaCsMessageOrigin.LuaMod);
+					HandleException(e);
 				}
 				return null;
 			}
@@ -409,7 +375,7 @@ namespace Barotrauma
 			LuaScriptLoader = new LuaScriptLoader();
 			LuaScriptLoader.ModulePaths = new string[] { };
 
-			LuaCustomConverters.Initialize(CallLuaFunction);
+			LuaCustomConverters.RegisterAll();
 
 			lua = new Script(CoreModules.Preset_SoftSandbox | CoreModules.Debug);
 			lua.Options.DebugPrint = PrintMessage;
@@ -430,8 +396,7 @@ namespace Barotrauma
 			UserData.RegisterType<LuaCsConfig>();
 			UserData.RegisterType<LuaCsAction>();
 			UserData.RegisterType<LuaCsFile>();
-			UserData.RegisterType<LuaCsCompatPatchFunc>();
-			UserData.RegisterType<LuaCsPatchFunc>();
+			UserData.RegisterType<LuaCsPatch>();
 			UserData.RegisterType<LuaCsConfig>();
 			UserData.RegisterType<CsScriptRunner>();
 			UserData.RegisterType<LuaGame>();
@@ -443,7 +408,7 @@ namespace Barotrauma
 			UserData.RegisterType<LuaCsPerformanceCounter>();
 			UserData.RegisterType<IUserDataDescriptor>();
 
-			lua.Globals["printerror"] = (Action<object>)PrintLuaError;
+			lua.Globals["printerror"] = (Action<object>)PrintError;
 
 			lua.Globals["setmodulepaths"] = (Action<string[]>)SetModulePaths;
 
@@ -498,13 +463,13 @@ namespace Barotrauma
 							}
 							catch (Exception ex)
                             {
-								HandleException(ex, LuaCsMessageOrigin.CSharpMod);
+								HandleException(ex, exceptionType: ExceptionType.CSharp);
 							}
 						});
 					}
 					catch (Exception ex)
 					{
-						HandleException(ex, LuaCsMessageOrigin.CSharpMod);
+						HandleException(ex, exceptionType: ExceptionType.CSharp);
 					}
 				}
 
@@ -524,7 +489,7 @@ namespace Barotrauma
 				}
 				catch (Exception e)
 				{
-					HandleException(e, LuaCsMessageOrigin.LuaMod);
+					HandleException(e);
 				}
 			}
 			else if (luaPackage != null)
@@ -540,15 +505,20 @@ namespace Barotrauma
 				}
 				catch (Exception e)
 				{
-					HandleException(e, LuaCsMessageOrigin.LuaMod);
+					HandleException(e);
 				}
 			}
 			else
 			{
-				PrintLuaError("LuaSetup.lua not found! Lua/LuaSetup.lua, no Lua scripts will be executed or work.");
+				PrintError("LuaSetup.lua not found! Lua/LuaSetup.lua, no Lua scripts will be executed or work.");
 			}
 
 			executionNumber++;
 		}
-    }
+
+	}
+
+
+
 }
+
