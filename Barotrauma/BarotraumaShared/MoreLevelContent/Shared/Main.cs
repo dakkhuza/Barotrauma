@@ -3,6 +3,7 @@ using Barotrauma.MoreLevelContent.Config;
 using HarmonyLib;
 using MoreLevelContent.Shared;
 using MoreLevelContent.Shared.Generation;
+using MoreLevelContent.Shared.XML;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -53,6 +54,7 @@ namespace MoreLevelContent
             MoveRuins.Init();
             levelContentProducer = new LevelContentProducer();
             MapDirector.Instance.Setup();
+            XMLManager.Instance.Setup();
 
             if (!levelContentProducer.Active)
             {
