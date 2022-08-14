@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
@@ -14,8 +14,17 @@ namespace Barotrauma
 	{
 		public bool IsSingleplayer => GameMain.IsSingleplayer;
 		public bool IsMultiplayer => GameMain.IsMultiplayer;
+		public string SaveFolder => SaveUtil.SaveFolder;
 
 #if CLIENT
+		public GameClient Client
+		{
+			get
+			{
+				return GameMain.Client;
+			}
+		}
+
 		public bool? ForceVoice = null;
 		public bool? ForceLocalVoice = null;
 
@@ -65,7 +74,15 @@ namespace Barotrauma
 				return Screen.Selected is SubEditorScreen;
             }
         }
+
 #else
+        public GameServer Server
+		{
+			get
+			{
+				return GameMain.Server;
+			}
+		}
 
 		public bool IsDedicated
 		{
@@ -74,12 +91,21 @@ namespace Barotrauma
 				return GameMain.Server.ServerPeer is LidgrenServerPeer;
 			}
 		}
-
-		public ServerSettings ServerSettings => GameMain.Server.ServerSettings;
 #endif
 
-		public DynValue Settings;
+        public ServerSettings ServerSettings
+        {
+            get
+            {
+#if SERVER
+                return GameMain.Server.ServerSettings;
+#else
+                return GameMain.Client.ServerSettings;
+#endif
+            }
+        }
 
+        public DynValue Settings;
 
 		public bool allowWifiChat = false;
 		public bool overrideTraitors = false;
@@ -367,13 +393,11 @@ namespace Barotrauma
 
 		public void AddCommand(string name, string help, LuaCsAction onExecute, LuaCsFunc getValidArgs = null, bool isCheat = false)
 		{
-			var cmd = new DebugConsole.Command(name, help, (string[] arg1) => { onExecute(new object[] { arg1 }); },
+			var cmd = new DebugConsole.Command(name, help, (string[] arg1) => onExecute(new object[] { arg1 }),
 				() =>
 				{
-					if (getValidArgs == null) { return null; }
-					var obj = getValidArgs();
-					if (obj is LuaResult lr) { return lr.DynValue().ToObject<string[][]>(); }
-					return (string[][])obj;
+					if (getValidArgs == null) return null;
+					return getValidArgs().ToObject<string[][]>();
 				}, isCheat);
 
 			luaAddedCommand.Add(cmd);
@@ -386,7 +410,7 @@ namespace Barotrauma
 
 		public void SaveGame(string path)
         {
-			if (LuaCsFile.CanWriteToPath(path)) { throw new ScriptRuntimeException($"Saving files to {path} is disallowed."); }
+			if (!LuaCsFile.CanWriteToPath(path)) { throw new ScriptRuntimeException($"Saving files to {path} is disallowed."); }
 			SaveUtil.SaveGame(path);
         }
 

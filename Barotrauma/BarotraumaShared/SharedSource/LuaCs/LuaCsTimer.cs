@@ -8,6 +8,17 @@ namespace Barotrauma
     {
         public static double Time => Timing.TotalTime;
         public static double GetTime() => Time;
+        public static double AccumulatorMax
+        {
+            get
+            {
+                return Timing.AccumulatorMax;
+            }
+            set
+            {
+                Timing.AccumulatorMax = value;
+            }
+        }
 
         private class TimerComparer : IComparer<TimedAction>
         {
@@ -68,7 +79,7 @@ namespace Barotrauma
                     }
                     catch (Exception e)
                     {
-                        GameMain.LuaCs.HandleException(e, "", LuaCsSetup.ExceptionType.CSharp);
+                        GameMain.LuaCs.HandleException(e, LuaCsMessageOrigin.CSharpMod);
                     }
 
                     timedActionsToRemove.Add(timedAction);
