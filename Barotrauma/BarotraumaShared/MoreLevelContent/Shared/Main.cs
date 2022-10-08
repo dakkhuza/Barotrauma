@@ -18,6 +18,7 @@ namespace MoreLevelContent
         public static bool IsCampaign => GameMain.GameSession?.GameMode is MultiPlayerCampaign;
         public static bool IsRunning => GameMain.GameSession?.IsRunning ?? false;
         public const string GUID = "com.dak.mlc";
+        public static bool IsRelase = true;
 
 
         public static Main Instance;

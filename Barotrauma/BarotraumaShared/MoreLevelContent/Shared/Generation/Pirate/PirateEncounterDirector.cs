@@ -6,8 +6,7 @@ namespace MoreLevelContent.Shared.Generation.Pirate
 {
     public class PirateEncounterDirector : GenerationDirector<PirateOutpostDirector>, IRoundStart
     {
-        public override bool Active => _active;
-        private bool _active = true;
+        public override bool Active => !Main.IsRelase;
         private MissionPrefab pirateMission;
 
         public override void Setup()
@@ -16,7 +15,6 @@ namespace MoreLevelContent.Shared.Generation.Pirate
             if (pirateMission == null)
             {
                 Log.Error("Couldn't find a pirate mission!");
-                _active = false;
             }
         }
 

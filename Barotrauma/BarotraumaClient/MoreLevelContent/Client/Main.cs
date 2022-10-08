@@ -1,5 +1,6 @@
 ﻿using Barotrauma;
 using Barotrauma.MoreLevelContent.Client;
+using Barotrauma.MoreLevelContent.Client.UI;
 using Barotrauma.MoreLevelContent.Config;
 using Barotrauma.Networking;
 using Microsoft.Xna.Framework;
@@ -20,6 +21,8 @@ namespace MoreLevelContent
         private FieldInfo traitorProbabilityText;
         public void InitClient()
         {
+            MapUI.Instance.Setup();
+
             // Exit if we're in an editor or single player
             if (Screen.Selected.IsEditor || GameMain.IsSingleplayer) return;
             traitorProbabilityText = typeof(NetLobbyScreen).GetField("traitorProbabilityText", BindingFlags.Instance | BindingFlags.NonPublic);

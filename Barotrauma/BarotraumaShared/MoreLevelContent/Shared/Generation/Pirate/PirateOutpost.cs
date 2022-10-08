@@ -21,6 +21,7 @@ namespace MoreLevelContent.Shared.Generation.Pirate
         private readonly float pirateDiff;
         private Submarine enemyBase;
         readonly PirateSpawnData _spawnData;
+        private bool _generated = false;
 
         public PirateOutpost(PirateSpawnData spawnData)
         {
@@ -36,6 +37,8 @@ namespace MoreLevelContent.Shared.Generation.Pirate
 
         public void Generate()
         {
+            if (_generated) return;
+            _generated = true;
             characters.Clear();
             characterItems.Clear();
 

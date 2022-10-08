@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Xml.Linq;
 using System.Linq;
-using Barotrauma.MoreLevelContent.Client.UI;
 
 namespace MoreLevelContent.Shared.Generation
 {
@@ -15,6 +14,7 @@ namespace MoreLevelContent.Shared.Generation
     {
         public override void Setup()
         {
+            if (Main.IsRelase) return;
             // Map
             var map_ctr_load = typeof(Map).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null, new Type[] { typeof(CampaignMode), typeof(XElement) }, null);
             var map_save = typeof(Map).GetMethod(nameof(Map.Save));
@@ -32,10 +32,6 @@ namespace MoreLevelContent.Shared.Generation
             _ = Main.Harmony.Patch(leveldata_ctr_load, postfix: new HarmonyMethod(GetType().GetMethod(nameof(OnLevelDataLoad), BindingFlags.Static | BindingFlags.NonPublic)));
             _ = Main.Harmony.Patch(leveldata_ctr_generate, postfix: new HarmonyMethod(GetType().GetMethod(nameof(OnLevelDataGenerate), BindingFlags.Static | BindingFlags.NonPublic)));
             _ = Main.Harmony.Patch(leveldata_save, postfix: new HarmonyMethod(GetType().GetMethod(nameof(OnLevelDataSave), BindingFlags.Static | BindingFlags.NonPublic)));
-
-#if CLIENT
-            MapUI.Instance.Setup();
-#endif
         }
 
         private static void OnLevelDataGenerate(LevelData __instance, LocationConnection locationConnection)

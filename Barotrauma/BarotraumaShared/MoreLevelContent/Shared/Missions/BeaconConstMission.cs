@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Barotrauma;
 using Microsoft.Xna.Framework;
 
-namespace MoreLevelContent.Shared.Missions
+namespace MoreLevelContent.Missions
 {
     partial class BeaconConstMission : Mission
     {

@@ -17,6 +17,7 @@ namespace Barotrauma.MoreLevelContent.Client.UI
         static FieldInfo tooltipField;
         public override void Setup()
         {
+            if (Main.IsRelase) return;
             var drawConnection = typeof(Map).GetMethod("DrawConnection", BindingFlags.NonPublic | BindingFlags.Instance);
             zoomLevel = typeof(Map).GetField("zoom", BindingFlags.Instance | BindingFlags.NonPublic);
             tooltipField = typeof(Map).GetField("tooltip", BindingFlags.Instance | BindingFlags.NonPublic);
