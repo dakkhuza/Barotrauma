@@ -26,8 +26,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="NLog" Version="5.0.2" />
-    <PackageReference Include="System.Data.SQLite" Version="1.0.116" />
+    <PackageReference Include="NLog" Version="5.0.4" />
+    <PackageReference Include="System.Data.SQLite" Version="1.0.111" />
   </ItemGroup>
 
   <Import Project="..\GA-SDK-MONO-SHARED\GA-SDK-MONO-SHARED.projitems" Label="Shared" />

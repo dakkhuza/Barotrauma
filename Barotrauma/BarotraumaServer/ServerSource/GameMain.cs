@@ -10,8 +10,6 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Xml.Linq;
-using MoonSharp.Interpreter;
-using System.Net;
 using Barotrauma.Extensions;
 
 namespace Barotrauma
@@ -33,8 +31,6 @@ namespace Barotrauma
             }
             set { world = value; }
         }
-
-        public static LuaCsSetup LuaCs;
 
         public static GameServer Server;
         public static NetworkMember NetworkMember
@@ -119,8 +115,6 @@ namespace Barotrauma
             NetLobbyScreen = new NetLobbyScreen();
 
             CheckContentPackage();
-
-            LuaCs = new LuaCsSetup();
         }
 
 
@@ -157,10 +151,9 @@ namespace Barotrauma
             string password = "";
             bool enableUpnp = false;
 
-            int maxPlayers = 10;
-            int? ownerKey = null;
-            UInt64 steamId = 0;
-            IPAddress listenIp = IPAddress.Any;
+            int maxPlayers = 10; 
+            Option<int> ownerKey = Option<int>.None();
+            Option<SteamId> steamId = Option<SteamId>.None();
 
             XDocument doc = XMLExtensions.TryLoadXml(ServerSettings.SettingsFile);
             if (doc?.Root == null)
@@ -176,7 +169,7 @@ namespace Barotrauma
                 password = doc.Root.GetAttributeString("password", "");
                 enableUpnp = doc.Root.GetAttributeBool("enableupnp", false);
                 maxPlayers = doc.Root.GetAttributeInt("maxplayers", 10);
-                ownerKey = null;
+                ownerKey = Option<int>.None();
             }
             
 #if DEBUG
@@ -193,12 +186,6 @@ namespace Barotrauma
                     case "-name":
                         name = CommandLineArgs[i + 1];
                         i++;
-                        break;
-                    case "-ip":
-                        if (IPAddress.TryParse(CommandLineArgs[i + 1], out IPAddress address))
-                            listenIp = address;
-                        else
-                            DebugConsole.ThrowError($"Invalid Ip Address '{CommandLineArgs[i + 1]}'.");
                         break;
                     case "-port":
                         int.TryParse(CommandLineArgs[i + 1], out port);
@@ -231,12 +218,12 @@ namespace Barotrauma
                     case "-ownerkey":
                         if (int.TryParse(CommandLineArgs[i + 1], out int key))
                         {
-                            ownerKey = key;
+                            ownerKey = Option<int>.Some(key);
                         }
                         i++;
                         break;
                     case "-steamid":
-                        UInt64.TryParse(CommandLineArgs[i + 1], out steamId);
+                        steamId = SteamId.Parse(CommandLineArgs[i + 1]);
                         i++;
                         break;
                     case "-pipes":
@@ -248,7 +235,6 @@ namespace Barotrauma
 
             Server = new GameServer(
                 name,
-                listenIp,
                 port,
                 queryPort,
                 publiclyVisible,
@@ -257,6 +243,7 @@ namespace Barotrauma
                 maxPlayers,
                 ownerKey,
                 steamId);
+            Server.StartServer();
 
             for (int i = 0; i < CommandLineArgs.Length; i++)
             {
@@ -288,7 +275,7 @@ namespace Barotrauma
 
         public void CloseServer()
         {
-            Server?.Disconnect();
+            Server?.Quit();
             ShouldRun = false;
             Server = null;
         }
@@ -333,8 +320,6 @@ namespace Barotrauma
                 prevTicks = currTicks;
                 while (Timing.Accumulator >= Timing.Step)
                 {
-                    performanceCounterTimer.Start();
-
                     Timing.TotalTime += Timing.Step;
                     DebugConsole.Update();
                     if (GameSession?.GameMode == null || !GameSession.GameMode.Paused)
@@ -345,16 +330,7 @@ namespace Barotrauma
                     if (Server == null) { break; }
                     SteamManager.Update((float)Timing.Step);
                     TaskPool.Update();
-                    CoroutineManager.Update((float)Timing.Step, (float)Timing.Step);
-
-                    GameMain.LuaCs.Update();
-                    GameMain.LuaCs.Hook.Call("think", new object[] { });
-                    performanceCounterTimer.Stop();
-                    if (GameMain.LuaCs.PerformanceCounter.EnablePerformanceCounter)
-                    {
-                        GameMain.LuaCs.PerformanceCounter.UpdateElapsedTime = (double)performanceCounterTimer.ElapsedTicks / Stopwatch.Frequency;
-                    }
-                    performanceCounterTimer.Reset();
+                    CoroutineManager.Update(paused: false, (float)Timing.Step);
 
                     Timing.Accumulator -= Timing.Step;
                     updateCount++;
@@ -436,7 +412,6 @@ namespace Barotrauma
         public void Exit()
         {
             ShouldRun = false;
-            GameMain.LuaCs.Stop();
         }
     }
 }
