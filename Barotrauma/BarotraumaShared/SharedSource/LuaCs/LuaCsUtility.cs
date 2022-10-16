@@ -1,4 +1,4 @@
-﻿using Barotrauma.Items.Components;
+using Barotrauma.Items.Components;
 using Barotrauma.Networking;
 using MoonSharp.Interpreter;
 using System;
@@ -55,19 +55,18 @@ namespace Barotrauma
 
 			bool pathStartsWith(string prefix) => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
 
-			if (pathStartsWith(getFullPath(ContentPackage.LocalModsDir + "Lua For Barotrauma")))
+
+			if (pathStartsWith(getFullPath(ContentPackage.LocalModsDir + "LuaForBarotraumaUnstable")))
 				return false;
 
-			if (pathStartsWith(getFullPath(ContentPackage.WorkshopModsDir + "Lua For Barotrauma")))
+			if (pathStartsWith(getFullPath(ContentPackage.WorkshopModsDir + "LuaForBarotraumaUnstable")))
 				return false;
 #if CLIENT
-			if (pathStartsWith(getFullPath(ModReceiver.DownloadFolder + "Lua For Barotrauma")))
+			if (pathStartsWith(getFullPath(ModReceiver.DownloadFolder + "LuaForBarotraumaUnstable")))
 				return false;
 #endif
-            if (pathStartsWith(getFullPath(SaveUtil.SaveFolder)))
-                return true;
 
-            if (pathStartsWith(getFullPath(ContentPackage.LocalModsDir)))
+			if (pathStartsWith(getFullPath(ContentPackage.LocalModsDir)))
 				return true;
 
 			if (pathStartsWith(getFullPath(ContentPackage.WorkshopModsDir)))
@@ -80,7 +79,7 @@ namespace Barotrauma
 			return false;
 		}
 
-		public static bool IsPathAllowedException(string path, bool write = true, LuaCsMessageOrigin origin = LuaCsMessageOrigin.Unknown)
+		public static bool IsPathAllowedException(string path, bool write = true, LuaCsSetup.ExceptionType exceptionType = LuaCsSetup.ExceptionType.Both)
 		{
 			if (write)
 			{
@@ -107,9 +106,9 @@ namespace Barotrauma
 		}
 
 		public static bool IsPathAllowedLuaException(string path, bool write = true) =>
-			IsPathAllowedException(path, write, LuaCsMessageOrigin.LuaMod);
+			IsPathAllowedException(path, write, LuaCsSetup.ExceptionType.Lua);
 		public static bool IsPathAllowedCsException(string path, bool write = true) =>
-			IsPathAllowedException(path, write, LuaCsMessageOrigin.CSharpMod);
+			IsPathAllowedException(path, write, LuaCsSetup.ExceptionType.CSharp);
 
 		public static string Read(string path)
 		{
