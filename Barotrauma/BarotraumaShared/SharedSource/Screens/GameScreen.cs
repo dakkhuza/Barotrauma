@@ -92,7 +92,6 @@ namespace Barotrauma
 #endif
 #endif
         }
-
         /// <summary>
         /// Allows the game to run logic such as updating the world,
         /// checking for collisions, gathering input, and playing audio.

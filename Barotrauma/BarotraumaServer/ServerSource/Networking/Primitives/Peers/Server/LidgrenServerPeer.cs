@@ -27,7 +27,8 @@ namespace Barotrauma.Networking
                 AutoExpandMTU = false,
                 MaximumConnections = NetConfig.MaxPlayers * 2,
                 EnableUPnP = serverSettings.EnableUPnP,
-                Port = serverSettings.Port
+                Port = serverSettings.Port,
+                LocalAddress = serverSettings.ListenIPAddress,
             };
 
             netPeerConfiguration.DisableMessageType(
@@ -185,7 +186,16 @@ namespace Barotrauma.Networking
         {
             if (netServer == null) { return; }
 
-            if (connectedClients.Count >= serverSettings.MaxPlayers)
+            var skipDeny = false;
+            {
+                var result = GameMain.LuaCs.Hook.Call<bool?>("lidgren.handleConnection", inc);
+                if (result != null) {
+                    if (result.Value) skipDeny = true;
+                    else return;
+                }
+            }
+
+            if (!skipDeny && connectedClients.Count >= serverSettings.MaxPlayers)
             {
                 inc.SenderConnection.Deny(PeerDisconnectPacket.WithReason(DisconnectReason.ServerFull).ToLidgrenStringRepresentation());
                 return;

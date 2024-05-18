@@ -3410,6 +3410,42 @@ namespace Barotrauma
                     NewMessage("Minimum main path width: " + (Level.Loaded.LevelData?.MinMainPathWidth?.ToString() ?? "unknown"));
                 }
             });
+
+            commands.Add(new Command("cl_lua", "lua_cl: runs a string on the client", (string[] args) =>
+            {
+                if (GameMain.Client != null && !GameMain.Client.HasPermission(ClientPermissions.ConsoleCommands))
+                {
+                    ThrowError("Command not permitted.");
+                    return;
+                }
+
+                try
+                {
+                    GameMain.LuaCs.Lua.DoString(string.Join(" ", args));
+                }
+                catch(Exception ex)
+                {
+                    GameMain.LuaCs.HandleException(ex);
+                }
+            }));
+            commands.Add(new Command("cl_cs", "cs_cl: runs a string on the client", (string[] args) =>
+            {
+                if (LuaCsSetup.GetPackage("CsForBarotrauma", false, true) == null) { return; }
+
+                if (GameMain.Client != null && !GameMain.Client.HasPermission(ClientPermissions.ConsoleCommands))
+                {
+                    ThrowError("Command not permitted.");
+                    return;
+                }
+
+                GameMain.LuaCs.CsScript.Run(string.Join(" ", args));
+                GameMain.LuaCs.RecreateCsScript();
+            }));
+
+            commands.Add(new Command("cl_reloadlua", "reloads lua on the client", (string[] args) =>
+            {
+                GameMain.LuaCs.Initialize();
+            }));
         }
 
         private static void ReloadWearables(Character character, int variant = 0)

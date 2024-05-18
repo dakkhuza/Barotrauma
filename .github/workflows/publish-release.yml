@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: Publish release
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  ARTIFACTS_DIR: 2049ef39-42a2-46d2-b513-ee6d2e3a7b15
+  ARCHIVE_BASE_NAME: luacsforbarotrauma
+  # XXX: these file names are subject to shell expansion.
+  # Be careful when using special characters.
+  ARCHIVE_FILES_SERVER: |
+    DedicatedServer.deps.json
+    DedicatedServer.dll
+    DedicatedServer.pdb
+  ARCHIVE_FILES_CLIENT: |
+    Barotrauma.deps.json
+    Barotrauma.dll
+    Barotrauma.pdb
+  ARCHIVE_FILES_SHARED: |
+    0Harmony.dll
+    Sigil.dll
+    MoonSharp.Interpreter.dll
+    MonoMod.Common.dll
+    Mono.Cecil.dll
+    Mono.Cecil.Mdb.dll
+    Mono.Cecil.Pdb.dll
+    Mono.Cecil.Rocks.dll
+    Microsoft.CodeAnalysis.CSharp.Scripting.dll
+    Microsoft.CodeAnalysis.CSharp.dll
+    Microsoft.CodeAnalysis.dll
+    Microsoft.CodeAnalysis.Scripting.dll
+    System.Collections.Immutable.dll
+    System.Reflection.Metadata.dll
+    System.Runtime.CompilerServices.Unsafe.dll
+    mscordaccore_amd64_amd64_*
+    Lua
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: |
+            3.1.x
+            6.0.x
+
+      - name: "Build: WindowsServer"
+        run: dotnet publish Barotrauma/BarotraumaServer/WindowsServer.csproj -c Release -clp:"ErrorsOnly;Summary" --self-contained -r win-x64 \/p:Platform="x64"
+      - name: "Build: WindowsClient"
+        run: dotnet publish Barotrauma/BarotraumaClient/WindowsClient.csproj -c Release -clp:"ErrorsOnly;Summary" --self-contained -r win-x64 \/p:Platform="x64"
+
+      - name: "Build: LinuxServer"
+        run: dotnet publish Barotrauma/BarotraumaServer/LinuxServer.csproj -c Release -clp:"ErrorsOnly;Summary" --self-contained -r linux-x64 \/p:Platform="x64"
+      - name: "Build: LinuxClient"
+        run: dotnet publish Barotrauma/BarotraumaClient/LinuxClient.csproj -c Release -clp:"ErrorsOnly;Summary" --self-contained -r linux-x64 \/p:Platform="x64"
+
+      - name: "Build: MacServer"
+        run: dotnet publish Barotrauma/BarotraumaServer/MacServer.csproj -c Release -clp:"ErrorsOnly;Summary" --self-contained -r osx-x64 \/p:Platform="x64"
+      - name: "Build: MacClient"
+        run: dotnet publish Barotrauma/BarotraumaClient/MacClient.csproj -c Release -clp:"ErrorsOnly;Summary" --self-contained -r osx-x64 \/p:Platform="x64"
+
+      - name: Create archives
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          shopt -u dotglob
+
+          IFS=$'\n' readarray -td $'\n' ARCHIVE_FILES_SHARED <<< "$ARCHIVE_FILES_SHARED"
+          IFS=$'\n' readarray -td $'\n' ARCHIVE_FILES_CLIENT <<< "$ARCHIVE_FILES_CLIENT"
+          IFS=$'\n' readarray -td $'\n' ARCHIVE_FILES_SERVER <<< "$ARCHIVE_FILES_SERVER"
+
+          platforms=(
+            "windows"
+            "linux"
+            "mac"
+          )
+          publish_dirs=(
+            "Barotrauma/bin/ReleaseWindows/net6.0/win-x64/publish"
+            "Barotrauma/bin/ReleaseLinux/net6.0/linux-x64/publish"
+            "Barotrauma/bin/ReleaseMac/net6.0/osx-x64/publish"
+          )
+
+          mkdir -p "$ARTIFACTS_DIR"
+          artifacts_dir="$(realpath "$ARTIFACTS_DIR")"
+
+          for i in "${!platforms[@]}"; do
+            (
+              platform="${platforms[i]}"
+              publish_dir="${publish_dirs[i]}"
+              cd "$publish_dir"
+              echo "Creating build_${platform}.zip"
+              zip -qr "${artifacts_dir}/${ARCHIVE_BASE_NAME}_build_${platform}.zip" *
+              echo "Creating patch_${platform}_client.zip"
+              zip -qr "${artifacts_dir}/${ARCHIVE_BASE_NAME}_patch_${platform}_client.zip" \
+                ${ARCHIVE_FILES_SHARED[@]} \
+                ${ARCHIVE_FILES_CLIENT[@]}
+              echo "Creating patch_${platform}_server.zip"
+              zip -qr "${artifacts_dir}/${ARCHIVE_BASE_NAME}_patch_${platform}_server.zip" \
+                ${ARCHIVE_FILES_SHARED[@]} \
+                ${ARCHIVE_FILES_SERVER[@]}
+            )
+          done
+
+          for i in "${!platforms[@]}"; do
+            (
+              platform="${platforms[i]}"
+              publish_dir="${publish_dirs[i]}"
+              cd "$publish_dir"
+              echo "Creating build_${platform}.tar.gz"
+              tar -czf "${artifacts_dir}/${ARCHIVE_BASE_NAME}_build_${platform}.tar.gz" \
+                --owner=0 --group=0 \
+                *
+              echo "Creating patch_${platform}_client.tar.gz"
+              tar -czf "${artifacts_dir}/${ARCHIVE_BASE_NAME}_patch_${platform}_client.tar.gz" \
+                --owner=0 --group=0 \
+                ${ARCHIVE_FILES_SHARED[@]} \
+                ${ARCHIVE_FILES_CLIENT[@]}
+              echo "Creating patch_${platform}_server.tar.gz"
+              tar -czf "${artifacts_dir}/${ARCHIVE_BASE_NAME}_patch_${platform}_server.tar.gz" \
+                --owner=0 --group=0 \
+                ${ARCHIVE_FILES_SHARED[@]} \
+                ${ARCHIVE_FILES_SERVER[@]}
+            )
+          done
+
+      - name: Publish release
+        uses: marvinpinto/action-automatic-releases@v1.2.1
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: latest
+          prerelease: false
+          title: Automatic Build
+          files: |
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_build_windows.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_windows_client.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_windows_server.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_build_linux.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_build_linux.tar.gz
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_linux_client.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_linux_client.tar.gz
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_linux_server.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_linux_server.tar.gz
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_build_mac.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_mac_client.zip
+            ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_BASE_NAME }}_patch_mac_server.zip

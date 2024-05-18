@@ -20,6 +20,9 @@ namespace Barotrauma.Networking
             MultiPlayerCampaign campaign = GameMain.GameSession.GameMode as MultiPlayerCampaign;
             foreach (Client c in networkMember.ConnectedClients)
             {
+                if (GameMain.LuaCs.Game.overrideRespawnSub)
+                    continue;
+
                 if (!c.InGame) { continue; }
                 if (c.SpectateOnly && (GameMain.Server.ServerSettings.AllowSpectating || GameMain.Server.OwnerConnection == c.Connection)) { continue; }
                 if (c.Character != null && !c.Character.IsDead) { continue; }
@@ -117,6 +120,10 @@ namespace Barotrauma.Networking
 
         private bool ShouldStartRespawnCountdown(int characterToRespawnCount)
         {
+            if (GameMain.LuaCs.Game.overrideRespawnSub)
+            {
+                characterToRespawnCount = 0;
+            }
             return characterToRespawnCount >= GetMinCharactersToRespawn();
         }
 
@@ -124,7 +131,10 @@ namespace Barotrauma.Networking
         {
             if (RespawnShuttle != null)
             {
-                RespawnShuttle.Velocity = Vector2.Zero;
+                if (!GameMain.LuaCs.Game.overrideRespawnSub)
+                {
+                    RespawnShuttle.Velocity = Vector2.Zero;
+                }
             }
 
             pendingRespawnCount = GetClientsToRespawn().Count();
@@ -166,11 +176,18 @@ namespace Barotrauma.Networking
             }
         }
 
-        private void DispatchShuttle()
+        public void DispatchShuttle()
         {
             if (RespawnShuttle != null)
             {
-                CurrentState = State.Transporting;
+                if (GameMain.LuaCs.Game.overrideRespawnSub)
+				{
+                    CurrentState = State.Waiting;
+                }
+                else
+				{
+                    CurrentState = State.Transporting;
+                }
                 GameMain.Server.CreateEntityEvent(this);
 
                 ResetShuttle();
@@ -183,7 +200,11 @@ namespace Barotrauma.Networking
                 GameServer.Log("Dispatching the respawn shuttle.", ServerLog.MessageType.Spawning);
 
                 Vector2 spawnPos = FindSpawnPos();
-                RespawnCharacters(spawnPos);
+
+                if (!GameMain.LuaCs.Game.overrideRespawnSub)
+                {
+                    RespawnCharacters(spawnPos);
+                }
 
                 CoroutineManager.StopCoroutines("forcepos");
                 if (spawnPos.Y > Level.Loaded.Size.Y)

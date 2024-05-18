@@ -10,6 +10,8 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Xml.Linq;
+using MoonSharp.Interpreter;
+using System.Net;
 using Barotrauma.Extensions;
 
 namespace Barotrauma
@@ -31,6 +33,8 @@ namespace Barotrauma
             }
             set { world = value; }
         }
+
+        public static LuaCsSetup LuaCs;
 
         public static GameServer Server;
         public static NetworkMember NetworkMember
@@ -113,6 +117,8 @@ namespace Barotrauma
             NetLobbyScreen = new NetLobbyScreen();
 
             CheckContentPackage();
+
+            LuaCs = new LuaCsSetup();
         }
 
 
@@ -152,6 +158,7 @@ namespace Barotrauma
             int maxPlayers = 10; 
             Option<int> ownerKey = Option<int>.None();
             Option<SteamId> steamId = Option<SteamId>.None();
+            IPAddress listenIp = IPAddress.Any;
 
             XDocument doc = XMLExtensions.TryLoadXml(ServerSettings.SettingsFile);
             if (doc?.Root == null)
@@ -184,6 +191,12 @@ namespace Barotrauma
                     case "-name":
                         name = CommandLineArgs[i + 1];
                         i++;
+                        break;
+                    case "-ip":
+                        if (IPAddress.TryParse(CommandLineArgs[i + 1], out IPAddress address))
+                            listenIp = address;
+                        else
+                            DebugConsole.ThrowError($"Invalid Ip Address '{CommandLineArgs[i + 1]}'.");
                         break;
                     case "-port":
                         int.TryParse(CommandLineArgs[i + 1], out port);
@@ -233,6 +246,7 @@ namespace Barotrauma
 
             Server = new GameServer(
                 name,
+                listenIp,
                 port,
                 queryPort,
                 publiclyVisible,
@@ -326,6 +340,8 @@ namespace Barotrauma
                 prevTicks = currTicks;
                 while (Timing.Accumulator >= Timing.Step)
                 {
+                    performanceCounterTimer.Start();
+
                     Timing.TotalTime += Timing.Step;
                     DebugConsole.Update();
                     if (GameSession?.GameMode == null || !GameSession.GameMode.Paused)
@@ -337,6 +353,15 @@ namespace Barotrauma
                     SteamManager.Update((float)Timing.Step);
                     TaskPool.Update();
                     CoroutineManager.Update(paused: false, (float)Timing.Step);
+
+                    GameMain.LuaCs.Update();
+                    GameMain.LuaCs.Hook.Call("think", new object[] { });
+                    performanceCounterTimer.Stop();
+                    if (GameMain.LuaCs.PerformanceCounter.EnablePerformanceCounter)
+                    {
+                        GameMain.LuaCs.PerformanceCounter.UpdateElapsedTime = (double)performanceCounterTimer.ElapsedTicks / Stopwatch.Frequency;
+                    }
+                    performanceCounterTimer.Reset();
 
                     Timing.Accumulator -= Timing.Step;
                     updateCount++;
@@ -418,6 +443,7 @@ namespace Barotrauma
         public void Exit()
         {
             ShouldRun = false;
+            GameMain.LuaCs.Stop();
         }
     }
 }

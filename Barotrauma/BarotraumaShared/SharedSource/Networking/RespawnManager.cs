@@ -128,7 +128,12 @@ namespace Barotrauma.Networking
                         {
                             foreach (Wire wire in connection.Wires)
                             {
-                                if (wire != null) wire.Locked = true;
+#if SERVER
+                                if (GameMain.LuaCs.Game.overrideRespawnSub == false)
+                                {
+                                    if (wire != null) wire.Locked = true;
+                                }
+#endif
                             }
                         }
                     }
@@ -155,6 +160,9 @@ namespace Barotrauma.Networking
 
         public void Update(float deltaTime)
         {
+            var result = GameMain.LuaCs.Hook.Call<bool?>("respawnManager.update");
+            if (result != null && result.Value) return;
+
             if (RespawnShuttle == null)
             {
                 if (CurrentState != State.Waiting)
@@ -211,6 +219,14 @@ namespace Barotrauma.Networking
         
         private IEnumerable<CoroutineStatus> ForceShuttleToPos(Vector2 position, float speed)
         {
+
+#if SERVER
+            if (GameMain.LuaCs.Game.overrideRespawnSub)
+			{
+                yield return CoroutineStatus.Success;
+            }
+#endif
+
             if (RespawnShuttle == null)
             {
                 yield return CoroutineStatus.Success;

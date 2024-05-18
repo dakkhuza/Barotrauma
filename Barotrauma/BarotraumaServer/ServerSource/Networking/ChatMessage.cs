@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Text;
+using MoonSharp.Interpreter;
 
 namespace Barotrauma.Networking
 {
@@ -102,9 +103,9 @@ namespace Barotrauma.Networking
                 similarity *= 0.25f;
             }
 
-            bool isSpamExempt = RateLimiter.IsExempt(c);
+            bool isOwner = GameMain.Server.OwnerConnection != null && c.Connection == GameMain.Server.OwnerConnection;
 
-            if (similarity + c.ChatSpamSpeed > 5.0f && !isSpamExempt)
+            if (similarity + c.ChatSpamSpeed > 5.0f && !isOwner && !GameMain.LuaCs.Game.disableSpamFilter)
             {
                 GameMain.Server.KarmaManager.OnSpamFilterTriggered(c);
 
@@ -125,11 +126,18 @@ namespace Barotrauma.Networking
 
             c.ChatSpamSpeed += similarity + 0.5f;
 
-            if (c.ChatSpamTimer > 0.0f && !isSpamExempt)
+            if (c.ChatSpamTimer > 0.0f && !isOwner && !GameMain.LuaCs.Game.disableSpamFilter)
             {
                 ChatMessage denyMsg = Create("", TextManager.Get("SpamFilterBlocked").Value, ChatMessageType.Server, null);
                 c.ChatSpamTimer = 10.0f;
                 GameMain.Server.SendDirectChatMessage(denyMsg, c);
+                return;
+            }
+
+            var should = GameMain.LuaCs.Hook.Call<bool?>("chatMessage", txt, c, type);
+
+            if (should != null && should.Value)
+            {
                 return;
             }
 
@@ -175,6 +183,8 @@ namespace Barotrauma.Networking
             {
                 GameMain.Server.SendChatMessage(txt, senderClient: c, chatMode: chatMode);
             }
+
+
         }
 
         public int EstimateLengthBytesServer(Client c)
@@ -182,7 +192,7 @@ namespace Barotrauma.Networking
             int length = 1 + //(byte)ServerNetObject.CHAT_MESSAGE
                             2 + //(UInt16)NetStateID
                             1 + //(byte)Type
-                            Encoding.UTF8.GetBytes(Text).Length + 2;
+                            (Text == null ? 0 : Encoding.UTF8.GetBytes(Text).Length) + 2;
             
             if (SenderClient != null)
             {
@@ -200,9 +210,9 @@ namespace Barotrauma.Networking
             return length;
         }
 
-        public virtual void ServerWrite(in SegmentTableWriter<ServerNetSegment> segmentTable, IWriteMessage msg, Client c)
+        public virtual void ServerWrite(IWriteMessage msg, Client c)
         {
-            segmentTable.StartNewSegment(ServerNetSegment.ChatMessage);
+            msg.WriteByte((byte)ServerNetObject.CHAT_MESSAGE);
             msg.WriteUInt16(NetStateID);
             msg.WriteRangedInteger((int)Type, 0, Enum.GetValues(typeof(ChatMessageType)).Length - 1);
             msg.WriteByte((byte)ChangeType);

@@ -11,6 +11,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Xml.Linq;
+using MoonSharp.Interpreter;
+using System.Net;
 
 namespace Barotrauma.Networking
 {
@@ -117,6 +119,7 @@ namespace Barotrauma.Networking
 
         public GameServer(
             string name,
+            IPAddress listenIp,
             int port,
             int queryPort,
             bool isPublic,
@@ -133,7 +136,7 @@ namespace Barotrauma.Networking
 
             LastClientListUpdateID = 0;
 
-            ServerSettings = new ServerSettings(this, name, port, queryPort, maxPlayers, isPublic, attemptUPnP);
+            ServerSettings = new ServerSettings(this, name, port, queryPort, maxPlayers, isPublic, attemptUPnP, listenIp);
             KarmaManager.SelectPreset(ServerSettings.KarmaPreset);
             ServerSettings.SetPassword(password);
             ServerSettings.SaveSettings();
@@ -185,6 +188,8 @@ namespace Barotrauma.Networking
                 registeredToMaster = SteamManager.CreateServer(this, ServerSettings.IsPublic);
 #endif
             }
+
+            GameMain.LuaCs.Initialize();
 
             Log("Server started", ServerLog.MessageType.ServerMessage);
 
@@ -278,6 +283,8 @@ namespace Barotrauma.Networking
                 SendConsoleMessage("Granted all permissions to " + newClient.Name + ".", newClient);
             }
 
+            GameMain.LuaCs.Hook.Call("client.connected", newClient);
+
             SendChatMessage($"ServerMessage.JoinedServer~[client]={ClientLogName(newClient)}", ChatMessageType.Server, null, changeType: PlayerConnectionChangeType.Joined);
             ServerSettings.ServerDetailsChanged = true;
 
@@ -360,8 +367,11 @@ namespace Barotrauma.Networking
                     Character character = Character.CharacterList[i];
                     if (character.IsDead || !character.ClientDisconnected) { continue; }
 
-                    character.KillDisconnectedTimer += deltaTime;
-                    character.SetStun(1.0f);
+                    if (!GameMain.LuaCs.Game.disableDisconnectCharacter)
+                    {
+                        character.KillDisconnectedTimer += deltaTime;
+                        character.SetStun(1.0f);
+                    }
 
                     Client owner = connectedClients.Find(c => (c.Character == null || c.Character == character) && character.IsClientOwner(c));
                     if ((OwnerConnection == null || owner?.Connection != OwnerConnection) && character.KillDisconnectedTimer > ServerSettings.KillDisconnectedTime)
@@ -696,6 +706,9 @@ namespace Barotrauma.Networking
             using var _ = dosProtection.Start(connectedClient);
 
             ClientPacketHeader header = (ClientPacketHeader)inc.ReadByte();
+            
+            GameMain.LuaCs.Networking.NetMessageReceived(inc, header, connectedClient);
+
             switch (header)
             {
                 case ClientPacketHeader.PING_RESPONSE:
@@ -1873,6 +1886,8 @@ namespace Barotrauma.Networking
             segmentTable.StartNewSegment(ServerNetSegment.ClientList);
             outmsg.WriteUInt16(LastClientListUpdateID);
 
+            GameMain.LuaCs.Hook.Call("writeClientList", c, outmsg);
+
             outmsg.WriteByte((byte)connectedClients.Count);
             foreach (Client client in connectedClients)
             {
@@ -1894,13 +1909,20 @@ namespace Barotrauma.Networking
                     IsOwner = client.Connection == OwnerConnection,
                     IsDownloading = FileSender.ActiveTransfers.Any(t => t.Connection == client.Connection)
                 };
+
+                var result = GameMain.LuaCs.Hook.Call<TempClient?>("writeClientList.modifyTempClientData", c, client, tempClientData, outmsg);
+
+                if (result != null)
+                {
+                    tempClientData = result.Value;
+                }
                 
                 outmsg.WriteNetSerializableStruct(tempClientData);
                 outmsg.WritePadBits();
             }
         }
 
-        private void ClientWriteLobby(Client c)
+        public void ClientWriteLobby(Client c)
         {
             bool isInitialUpdate = false;
 
@@ -2515,8 +2537,11 @@ namespace Barotrauma.Networking
             {
                 if (!(GameMain.GameSession?.GameMode is CampaignMode))
                 {
-                    TraitorManager = new TraitorManager();
-                    TraitorManager.Start(this);
+                    if (!GameMain.LuaCs.Game.overrideTraitors)
+                    {
+                        TraitorManager = new TraitorManager();
+                        TraitorManager.Start(this);
+                    }
                 }
             }
 
@@ -2537,6 +2562,8 @@ namespace Barotrauma.Networking
             LastClientListUpdateID++;
 
             roundStartTime = DateTime.Now;
+
+            GameMain.LuaCs.Hook.Call("roundStart");
 
             startGameCoroutine = null;
             yield return CoroutineStatus.Success;
@@ -2687,6 +2714,12 @@ namespace Barotrauma.Networking
             string endMessage = TextManager.FormatServerMessage("RoundSummaryRoundHasEnded");
             var traitorResults = TraitorManager?.GetEndResults() ?? new List<TraitorMissionResult>();
 
+            List<TraitorMissionResult> customTraitorResults = GameMain.LuaCs.Hook.Call<List<TraitorMissionResult>>("roundEnd");
+            if (customTraitorResults != null)
+            {
+                traitorResults = customTraitorResults;
+            }
+
             List<Mission> missions = GameMain.GameSession.Missions.ToList();
             if (GameMain.GameSession is { IsRunning: true })
             {
@@ -2810,6 +2843,15 @@ namespace Barotrauma.Networking
             }
             c.NameId = nameId;
             if (newName == c.Name && newJob == c.PreferredJob && newTeam == c.PreferredTeam) { return false; }
+
+            var result = GameMain.LuaCs.Hook.Call<bool?>("tryChangeClientName", c, newName, newJob, newTeam);
+
+            if (result != null)
+            {
+                LastClientListUpdateID++;
+                return result.Value;
+            }
+
             c.PreferredJob = newJob;
             c.PreferredTeam = newTeam;
 
@@ -2998,6 +3040,8 @@ namespace Barotrauma.Networking
         public void DisconnectClient(Client client, PeerDisconnectPacket peerDisconnectPacket)
         {
             if (client == null) return;
+
+            GameMain.LuaCs.Hook.Call("client.disconnected", client);
 
             if (client.Character != null)
             {
@@ -3233,12 +3277,20 @@ namespace Barotrauma.Networking
                 senderName = null;
                 senderCharacter = null;
             }
-            else if (type == ChatMessageType.Radio)
+            else if (type == ChatMessageType.Radio && !GameMain.LuaCs.Game.overrideSignalRadio)
             {
                 //send to chat-linked wifi components
                 Signal s = new Signal(message, sender: senderCharacter, source: senderRadio.Item);
                 senderRadio.TransmitSignal(s, sentFromChat: true);
             }
+
+            var hookChatMsg = ChatMessage.Create(senderName, message, (ChatMessageType)type, senderCharacter, senderClient, changeType);
+
+            var should = GameMain.LuaCs.Hook.Call<bool?>("modifyChatMessage", hookChatMsg, senderRadio);
+
+            if (should != null && should.Value)
+                return;
+            
 
             //check which clients can receive the message and apply distance effects
             foreach (Client client in ConnectedClients)
@@ -3272,6 +3324,7 @@ namespace Barotrauma.Networking
                         break;
                 }
 
+
                 var chatMsg = ChatMessage.Create(
                     senderName,
                     modifiedMessage,
@@ -3279,7 +3332,7 @@ namespace Barotrauma.Networking
                     senderCharacter,
                     senderClient,
                     changeType);
-
+               
                 SendDirectChatMessage(chatMsg, client);
             }
 
@@ -3871,6 +3924,8 @@ namespace Barotrauma.Networking
                     assignedClientCount[c.AssignedJob.Prefab]++;
                 }
             }
+
+            GameMain.LuaCs.Hook.Call("jobsAssigned", unassigned);
         }
 
         public void AssignBotJobs(List<CharacterInfo> bots, CharacterTeamType teamID)
@@ -3993,6 +4048,8 @@ namespace Barotrauma.Networking
         public static void Log(string line, ServerLog.MessageType messageType)
         {
             if (GameMain.Server == null || !GameMain.Server.ServerSettings.SaveServerLogs) { return; }
+
+            GameMain.LuaCs?.Hook?.Call("serverLog", line, messageType);
 
             GameMain.Server.ServerSettings.ServerLog.WriteLine(line, messageType);
 

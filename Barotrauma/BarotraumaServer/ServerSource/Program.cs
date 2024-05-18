@@ -72,7 +72,16 @@ namespace Barotrauma
             }
 
             string executableDir = Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location);
-            Directory.SetCurrentDirectory(executableDir);
+            if (!File.Exists(Path.Combine(executableDir, "workshop.txt")))
+            {
+                Directory.SetCurrentDirectory(executableDir);
+            }
+
+            if (File.Exists("usecurrentdirectoryforsaves"))
+            {
+                SaveUtil.SaveFolder = Environment.CurrentDirectory;
+            }
+
             Game = new GameMain(args);
 
             Game.Run();

@@ -2,18 +2,20 @@
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Text;
+using MoonSharp.Interpreter;
 
 namespace Barotrauma.Networking
 {
     class VoipServer
     {
-        private readonly ServerPeer netServer;
-        private readonly List<VoipQueue> queues;
-        private readonly Dictionary<VoipQueue,DateTime> lastSendTime;
+        private ServerPeer netServer;
+        private List<VoipQueue> queues;
+        private Dictionary<VoipQueue,DateTime> lastSendTime;
 
         public VoipServer(ServerPeer server)
         {
-            netServer = server;
+            this.netServer = server;
             queues = new List<VoipQueue>();
             lastSendTime = new Dictionary<VoipQueue, DateTime>();
         }
@@ -45,19 +47,17 @@ namespace Barotrauma.Networking
                 }
 
                 Client sender = clients.Find(c => c.VoipQueue == queue);
-                if (sender == null) { return; }
 
                 foreach (Client recipient in clients)
                 {
                     if (recipient == sender) { continue; }
 
-                    if (!CanReceive(sender, recipient, out float distanceFactor)) { continue; }
+                    if (!CanReceive(sender, recipient)) { continue; }
 
                     IWriteMessage msg = new WriteOnlyMessage();
 
                     msg.WriteByte((byte)ServerPacketHeader.VOICE);
                     msg.WriteByte((byte)queue.QueueID);
-                    msg.WriteRangedSingle(distanceFactor, 0.0f, 1.0f, 8);
                     queue.Write(msg);
                     
                     netServer.Send(msg, recipient.Connection, DeliveryMethod.Unreliable);
@@ -65,15 +65,9 @@ namespace Barotrauma.Networking
             }
         }
 
-        private static bool CanReceive(Client sender, Client recipient, out float distanceFactor)
+        private bool CanReceive(Client sender, Client recipient)
         {
-            if (Screen.Selected != GameMain.GameScreen) 
-            {
-                distanceFactor = 0.0f;
-                return true; 
-            }
-
-            distanceFactor = 0.0f;
+            if (Screen.Selected != GameMain.GameScreen) { return true; }
 
             //no-one can hear muted players
             if (sender.Muted) { return false; }
@@ -81,47 +75,42 @@ namespace Barotrauma.Networking
             bool recipientSpectating = recipient.Character == null || recipient.Character.IsDead;
             bool senderSpectating = sender.Character == null || sender.Character.IsDead;
 
-            //non-spectators cannot hear spectators, and spectators can always hear spectators
-            if (senderSpectating)
-            {
-                return recipientSpectating;
-            }
+            //TODO: only allow spectators to hear the voice chat if close enough to the speaker?
+
+            //non-spectators cannot hear spectators
+            if (senderSpectating && !recipientSpectating) { return false; }
+
+            //both spectating, no need to do radio/distance checks
+            if (recipientSpectating && senderSpectating) { return true; }
+
+            //spectators can hear non-spectators
+            if (!senderSpectating && recipientSpectating) { return true; }
 
             //sender can't speak
             if (sender.Character != null && sender.Character.SpeechImpediment >= 100.0f) { return false; }
 
             //check if the message can be sent via radio
-            WifiComponent recipientRadio = null;
             if (!sender.VoipQueue.ForceLocal &&
-                ChatMessage.CanUseRadio(sender.Character, out WifiComponent senderRadio) &&
-                (recipientSpectating || ChatMessage.CanUseRadio(recipient.Character, out recipientRadio)))
+                ChatMessage.CanUseRadio(sender.Character, out WifiComponent senderRadio) && 
+                ChatMessage.CanUseRadio(recipient.Character, out WifiComponent recipientRadio))
             {
-                if (recipientSpectating)
-                {
-                    if (recipient.SpectatePos == null) { return true; }
-                    distanceFactor = MathHelper.Clamp(Vector2.Distance(sender.Character.WorldPosition, recipient.SpectatePos.Value) / senderRadio.Range, 0.0f, 1.0f);
-                    return distanceFactor < 1.0f;
-                }
-                else if (recipientRadio != null && recipientRadio.CanReceive(senderRadio))
-                {
-                    distanceFactor = MathHelper.Clamp(Vector2.Distance(sender.Character.WorldPosition, recipient.Character.WorldPosition) / senderRadio.Range, 0.0f, 1.0f);
-                    return true;
-                }
+                var should = GameMain.LuaCs.Hook.Call<bool?>("canUseVoiceRadio", new object[] { sender, recipient });
+
+                if (should != null)
+                    return should.Value;
+
+                if (recipientRadio.CanReceive(senderRadio)) { return true; }
             }
 
-            if (recipientSpectating)
-            {
-                if (recipient.SpectatePos == null) { return true; }
-                distanceFactor = MathHelper.Clamp(Vector2.Distance(sender.Character.WorldPosition, recipient.SpectatePos.Value) / ChatMessage.SpeakRange, 0.0f, 1.0f);
-                return distanceFactor < 1.0f;
-            }
-            else
-            {
-                //otherwise do a distance check
-                float garbleAmount = ChatMessage.GetGarbleAmount(recipient.Character, sender.Character, ChatMessage.SpeakRange);
-                distanceFactor = garbleAmount;
-                return garbleAmount < 1.0f;
-            }
+            var should2 = GameMain.LuaCs.Hook.Call<float?>("changeLocalVoiceRange", sender, recipient);
+            float range = 1.0f;
+
+            if (should2 != null)
+                range = should2.Value;
+            
+
+            //otherwise do a distance check
+            return ChatMessage.GetGarbleAmount(recipient.Character, sender.Character, ChatMessage.SpeakRange) < range;
         }
     }
 }

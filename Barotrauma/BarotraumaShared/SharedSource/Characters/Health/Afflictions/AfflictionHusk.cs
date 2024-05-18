@@ -309,12 +309,13 @@ namespace Barotrauma
 
             if (Prefab is AfflictionPrefabHusk huskPrefab)
             {
-                if (huskPrefab.ControlHusk)
+                if (huskPrefab.ControlHusk || GameMain.LuaCs.Game.enableControlHusk)
                 {
 #if SERVER
                     if (client != null)
                     {
                         GameMain.Server.SetClientCharacter(client, husk);
+                        GameMain.LuaCs.Hook.Call("husk.clientControlHusk", new object[] { client, husk });
                     }
 #else
                     if (!character.IsRemotelyControlled && character == Character.Controlled)

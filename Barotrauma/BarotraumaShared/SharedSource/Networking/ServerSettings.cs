@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -268,7 +269,7 @@ namespace Barotrauma.Networking
 
         partial void InitProjSpecific();
 
-        public ServerSettings(NetworkMember networkMember, string serverName, int port, int queryPort, int maxPlayers, bool isPublic, bool enableUPnP)
+        public ServerSettings(NetworkMember networkMember, string serverName, int port, int queryPort, int maxPlayers, bool isPublic, bool enableUPnP, IPAddress listenIp)
         {
             ServerLog = new ServerLog(serverName);
 
@@ -282,6 +283,7 @@ namespace Barotrauma.Networking
             InitProjSpecific();
 
             ServerName = serverName;
+            ListenIPAddress = listenIp;
             Port = port;
             QueryPort = queryPort;
             EnableUPnP = enableUPnP;
@@ -362,6 +364,8 @@ namespace Barotrauma.Networking
 
         public int QueryPort;
 
+        public IPAddress ListenIPAddress;
+
         public bool EnableUPnP;
 
         public ServerLog ServerLog;
@@ -372,7 +376,7 @@ namespace Barotrauma.Networking
         public const int MaxExtraCargoItemTypes = 20;
         public Dictionary<ItemPrefab, int> ExtraCargo { get; private set; }
 
-        public HashSet<string> HiddenSubs { get; private set; }
+        public HashSet<string> HiddenSubs { get; set; }
 
         private float selectedLevelDifficulty;
         private string password;
@@ -898,7 +902,7 @@ namespace Barotrauma.Networking
         public int MaxPlayers
         {
             get { return maxPlayers; }
-            set { maxPlayers = MathHelper.Clamp(value, 1, NetConfig.MaxPlayers); }
+            set { maxPlayers = MathHelper.Clamp(value, 0, NetConfig.MaxPlayers); }
         }
 
         public List<MissionType> AllowedRandomMissionTypes

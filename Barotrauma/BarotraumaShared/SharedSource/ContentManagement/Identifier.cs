@@ -122,10 +122,10 @@ namespace Barotrauma
         public static bool operator !=(string str, in Identifier? identifier) =>
             !(identifier == str);
 
-        internal int IndexOf(char c) => Value.IndexOf(c);
-
-        internal Identifier this[Range range] => Value[range].ToIdentifier();
-        internal Char this[int i] => Value[i];
+        public static implicit operator Identifier(string str)
+        {
+            return new Identifier(str);
+        }
     }
 
     public static class IdentifierExtensions

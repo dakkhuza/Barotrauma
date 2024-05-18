@@ -12,13 +12,13 @@ namespace Barotrauma.Items.Components
         private readonly struct EventData : IEventData
         {
             public readonly CustomInterfaceElement BtnElement;
-            
+
             public EventData(CustomInterfaceElement btnElement)
             {
                 BtnElement = btnElement;
             }
         }
-        
+
         class CustomInterfaceElement : ISerializableEntity
         {
             public bool ContinuousSignal;
@@ -194,7 +194,7 @@ namespace Barotrauma.Items.Components
         }
 
         private readonly List<CustomInterfaceElement> customInterfaceElementList = new List<CustomInterfaceElement>();
-        
+
         public CustomInterface(Item item, ContentXElement element)
             : base(item, element)
         {
@@ -311,8 +311,8 @@ namespace Barotrauma.Items.Components
 
         partial void UpdateSignalsProjSpecific();
 
-        partial void InitProjSpecific();     
-        
+        partial void InitProjSpecific();
+
         private void ButtonClicked(CustomInterfaceElement btnElement)
         {
             if (btnElement == null) return;

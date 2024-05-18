@@ -38,6 +38,7 @@ namespace Barotrauma
 
     static partial class DebugConsole
     {
+        
         public partial class Command
         {
             public readonly string[] names;
@@ -162,7 +163,7 @@ namespace Barotrauma
         private static readonly int messagesPerFile = 800;
         public const string SavePath = "ConsoleLogs";
 
-        private static void AssignOnExecute(string names, Action<string[]> onExecute)
+        public static void AssignOnExecute(string names, Action<string[]> onExecute)
         {
             var matchingCommand = commands.Find(c => c.names.Intersect(names.Split('|')).Count() > 0);
             if (matchingCommand == null)
@@ -2036,8 +2037,8 @@ namespace Barotrauma
 #if DEBUG
                     AddWarning($"You're not permitted to use the command \"{splitCommand[0].ToLowerInvariant()}\". Executing the command anyway because this is a debug build.");
 #else
-                    ThrowError($"You're not permitted to use the command \"{splitCommand[0].ToLowerInvariant()}\"!");
-                    return;
+                    //ThrowError($"You're not permitted to use the command \"{splitCommand[0].ToLowerInvariant()}\"!");
+                    //return;
 #endif
                 }
             }
@@ -2110,7 +2111,7 @@ namespace Barotrauma
             return null;
         }
 
-        private static void SpawnCharacter(string[] args, Vector2 cursorWorldPos, out string errorMsg)
+        public static void SpawnCharacter(string[] args, Vector2 cursorWorldPos, out string errorMsg)
         {
             errorMsg = "";
             if (args.Length == 0) { return; }
@@ -2214,7 +2215,7 @@ namespace Barotrauma
             }
         }
 
-        private static void SpawnItem(string[] args, Vector2 cursorPos, Character controlledCharacter, out string errorMsg)
+        public static void SpawnItem(string[] args, Vector2 cursorPos, Character controlledCharacter, out string errorMsg)
         {
             errorMsg = "";
             if (args.Length < 1) return;

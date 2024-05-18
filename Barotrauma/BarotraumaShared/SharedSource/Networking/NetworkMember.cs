@@ -36,7 +36,9 @@ namespace Barotrauma.Networking
         TRANSFER_MONEY,      // wallet transfers
         REWARD_DISTRIBUTION, // wallet reward distribution
         READY_CHECK,
-        READY_TO_SPAWN
+        READY_TO_SPAWN,
+        
+        LUA_NET_MESSAGE
     }
 
     enum ClientNetSegment
@@ -86,7 +88,9 @@ namespace Barotrauma.Networking
         CREW,               //anything related to managing bots in multiplayer
         MEDICAL,            //medical clinic
         MONEY,
-        READY_CHECK         //start, end and update a ready check
+        READY_CHECK,        //start, end and update a ready check
+        
+        LUA_NET_MESSAGE
     }
     enum ServerNetSegment
     {

@@ -162,6 +162,11 @@ namespace Barotrauma
         private readonly List<SubmarineInfo> subs;
         public IReadOnlyList<SubmarineInfo> GetSubList() => subs;
 
+        public void AddSub(SubmarineInfo sub)
+		{
+            subs.Add(sub);
+		}
+
         public string LevelSeed
         {
             get

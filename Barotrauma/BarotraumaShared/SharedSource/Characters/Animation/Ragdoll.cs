@@ -11,6 +11,7 @@ using System.Xml.Linq;
 using Barotrauma.Extensions;
 using LimbParams = Barotrauma.RagdollParams.LimbParams;
 using JointParams = Barotrauma.RagdollParams.JointParams;
+using MoonSharp.Interpreter;
 
 namespace Barotrauma
 {
@@ -759,6 +760,13 @@ namespace Barotrauma
                         if (character.Submarine != null) impactPos += character.Submarine.Position;
 
                         float impactDamage = Math.Min((impact - ImpactTolerance) * ImpactDamageMultiplayer, character.MaxVitality * MaxImpactDamage);
+
+                        var should = GameMain.LuaCs.Hook.Call<float?>("changeFallDamage", impactDamage, character, impactPos, velocity);
+
+                        if (should != null)
+						{
+                            impactDamage = should.Value;
+                        }
 
                         character.LastDamageSource = null;
                         character.AddDamage(impactPos, AfflictionPrefab.ImpactDamage.Instantiate(impactDamage).ToEnumerable(), 0.0f, true);

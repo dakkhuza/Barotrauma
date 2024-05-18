@@ -7,12 +7,17 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
+using Barotrauma.Networking;
+using Barotrauma.Extensions;
+using System.Globalization;
+using MoonSharp.Interpreter;
+using Barotrauma.Abilities;
 
 namespace Barotrauma
 {
     partial class CharacterHealth
     {
-        class LimbHealth
+        public class LimbHealth
         {
             public Sprite IndicatorSprite;
             public Sprite HighlightSprite;
@@ -434,6 +439,7 @@ namespace Barotrauma
                     {
                         AddLimbAffliction(limbHealth, affliction, allowStacking: allowStacking);
                     }
+
                 }
                 else
                 {
@@ -584,6 +590,11 @@ namespace Barotrauma
                 return;
             }
 
+            var should = GameMain.LuaCs.Hook.Call<bool?>("character.applyDamage", this, attackResult, hitLimb, allowStacking);
+
+            if (should != null && should.Value)
+                return;
+
             foreach (Affliction newAffliction in attackResult.Afflictions)
             {
                 if (newAffliction.Prefab.LimbSpecific)
@@ -723,6 +734,11 @@ namespace Barotrauma
                 (newAffliction.Prefab.AfflictionType == AfflictionPrefab.PoisonType || newAffliction.Prefab.AfflictionType == AfflictionPrefab.ParalysisType)) { return; }
             if (Character.EmpVulnerability <= 0 && newAffliction.Prefab.AfflictionType == AfflictionPrefab.EMPType) { return; }
             if (newAffliction.Prefab.TargetSpecies.Any() && newAffliction.Prefab.TargetSpecies.None(s => s == Character.SpeciesName)) { return; }
+
+            var should = GameMain.LuaCs.Hook.Call<bool?>("character.applyAffliction", this, limbHealth, newAffliction, allowStacking);
+
+            if (should != null && should.Value)
+                return;
 
             Affliction existingAffliction = null;
             foreach (KeyValuePair<Affliction, LimbHealth> kvp in afflictions)

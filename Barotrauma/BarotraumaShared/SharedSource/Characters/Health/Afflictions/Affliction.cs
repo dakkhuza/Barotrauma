@@ -450,6 +450,9 @@ namespace Barotrauma
             {
                 GrainEffectStrength -= amount;
             }
+            #if SERVER
+                GameMain.LuaCs.Hook.Call("afflictionUpdate", new object[] { this, characterHealth, targetLimb, deltaTime });
+            #endif
         }
 
         public void ApplyStatusEffects(ActionType type, float deltaTime, CharacterHealth characterHealth, Limb targetLimb)

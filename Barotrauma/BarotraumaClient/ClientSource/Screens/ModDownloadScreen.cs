@@ -116,6 +116,7 @@ namespace Barotrauma
                     ContentPackageManager.EnabledPackages.SetRegular(regularPackages);
                 }
                 GameMain.NetLobbyScreen.Select();
+                GameMain.LuaCs.Initialize();
                 return;
             }
 
@@ -363,6 +364,7 @@ namespace Barotrauma
                     }
                     GameMain.NetLobbyScreen.UpdateSubList(GameMain.NetLobbyScreen.SubList, GameMain.Client.ServerSubmarines);
                     GameMain.NetLobbyScreen.Select();
+                    GameMain.LuaCs.Initialize();
                 }
             }
         }

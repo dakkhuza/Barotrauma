@@ -311,6 +311,10 @@ namespace Barotrauma.Items.Components
                 wire.RegisterSignal(signal, source: this);
 #endif
 
+                object[] obj = new object[] { signal, connection };
+                GameMain.LuaCs.Hook.Call("signalReceived", obj);
+                GameMain.LuaCs.Hook.Call("signalReceived." + recipient.item.Prefab.Identifier, obj);
+
                 foreach (ItemComponent ic in recipient.item.Components)
                 {
                     ic.ReceiveSignal(signal, connection);

@@ -19,6 +19,11 @@ namespace Barotrauma
         protected List<ushort> linkedToID;
         public List<ushort> unresolvedLinkedToID;
 
+        public static int MapEntityUpdateInterval = 1;
+        public static int GapUpdateInterval = 4;
+        public static int PoweredUpdateInterval = 1;
+        private static int mapEntityUpdateTick;
+
         /// <summary>
         /// List of upgrades this item has
         /// </summary>
@@ -56,24 +61,7 @@ namespace Barotrauma
         //the position and dimensions of the entity
         protected Rectangle rect;
 
-        protected static readonly HashSet<MapEntity> highlightedEntities = new HashSet<MapEntity>();
-
-        public static IEnumerable<MapEntity> HighlightedEntities => highlightedEntities;
-
-
-        private bool externalHighlight = false;
-        public bool ExternalHighlight
-        {
-            get { return externalHighlight; }
-            set
-            {
-                if (value != externalHighlight)
-                {
-                    externalHighlight = value;
-                    CheckIsHighlighted();
-                }
-            }
-        }
+        public bool ExternalHighlight = false;
 
         //is the mouse inside the rect
         private bool isHighlighted;
@@ -81,14 +69,7 @@ namespace Barotrauma
         public bool IsHighlighted
         {
             get { return isHighlighted || ExternalHighlight; }
-            set 
-            { 
-                if (value != IsHighlighted)
-                {
-                    isHighlighted = value; 
-                    CheckIsHighlighted();
-                }
-            }
+            set { isHighlighted = value; }
         }
 
         public virtual Rectangle Rect
@@ -179,7 +160,7 @@ namespace Barotrauma
             {
                 if (!float.IsNaN(value))
                 {
-                    _spriteOverrideDepth = MathHelper.Clamp(value, 0.001f, 0.999999f);
+                    _spriteOverrideDepth = MathHelper.Clamp(value, 0.001f, 0.999f);
                     if (this is Item) { _spriteOverrideDepth = Math.Min(_spriteOverrideDepth, 0.9f); }
                     SpriteDepthOverrideIsSet = true;
                 }
@@ -312,7 +293,7 @@ namespace Barotrauma
             }
         }
 
-        public virtual void Move(Vector2 amount, bool ignoreContacts = true)
+        public virtual void Move(Vector2 amount, bool ignoreContacts = false)
         {
             rect.X += (int)amount.X;
             rect.Y += (int)amount.Y;
@@ -383,31 +364,6 @@ namespace Barotrauma
             return true;
         }
 
-        protected virtual void CheckIsHighlighted()
-        {
-            if (IsHighlighted || ExternalHighlight)
-            {
-                highlightedEntities.Add(this);
-            }
-            else
-            {
-                highlightedEntities.Remove(this);
-            }
-        }
-
-        private static readonly List<MapEntity> tempHighlightedEntities = new List<MapEntity>();
-        public static void ClearHighlightedEntities()
-        {
-            highlightedEntities.RemoveWhere(e => e.Removed);
-            tempHighlightedEntities.Clear();
-            tempHighlightedEntities.AddRange(highlightedEntities);
-            foreach (var entity in tempHighlightedEntities)
-            {
-                entity.IsHighlighted = false;
-            }
-        }
-
-
         public abstract MapEntity Clone();
 
         public static List<MapEntity> Clone(List<MapEntity> entitiesToClone)
@@ -449,7 +405,7 @@ namespace Barotrauma
             List<Wire> orphanedWires = new List<Wire>();
             for (int i = 0; i < clones.Count; i++)
             {
-                if (clones[i] is not Item cloneItem) { continue; }
+                if (!(clones[i] is Item cloneItem)) { continue; }
 
                 var door = cloneItem.GetComponent<Door>();
                 door?.RefreshLinkedGap();
@@ -504,12 +460,10 @@ namespace Barotrauma
                     }
 
                     (clones[itemIndex] as Item).Connections[connectionIndex].TryAddLink(cloneWire);
-                    cloneWire.Connect((clones[itemIndex] as Item).Connections[connectionIndex], n, addNode: false);
+                    cloneWire.Connect((clones[itemIndex] as Item).Connections[connectionIndex], false);
                 }
 
-                if (originalWire.Connections.Any(c => c != null) &&
-                    (cloneWire.Connections[0] == null || cloneWire.Connections[1] == null) && 
-                    cloneItem.GetComponent<DockingPort>() == null)
+                if ((cloneWire.Connections[0] == null || cloneWire.Connections[1] == null) && cloneItem.GetComponent<DockingPort>() == null)
                 {
                     if (!clones.Any(c => (c as Item)?.GetComponent<ConnectionPanel>()?.DisconnectedWires.Contains(cloneWire) ?? false))
                     {
@@ -606,30 +560,44 @@ namespace Barotrauma
         /// </summary>
         public static void UpdateAll(float deltaTime, Camera cam)
         {
+            mapEntityUpdateTick++;
+
 #if CLIENT
             var sw = new System.Diagnostics.Stopwatch();
             sw.Start();
 #endif
-            foreach (Hull hull in Hull.HullList)
+            if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
             {
-                hull.Update(deltaTime, cam);
-            }
+
+                foreach (Hull hull in Hull.HullList)
+                {
+                    hull.Update(deltaTime * MapEntityUpdateInterval, cam);
+                }
 #if CLIENT
-            Hull.UpdateCheats(deltaTime, cam);
+                Hull.UpdateCheats(deltaTime * MapEntityUpdateInterval, cam);
 #endif
 
-            foreach (Structure structure in Structure.WallList)
-            {
-                structure.Update(deltaTime, cam);
+                foreach (Structure structure in Structure.WallList)
+                {
+                    structure.Update(deltaTime * MapEntityUpdateInterval, cam);
+                }
             }
 
             //update gaps in random order, because otherwise in rooms with multiple gaps
             //the water/air will always tend to flow through the first gap in the list,
             //which may lead to weird behavior like water draining down only through
             //one gap in a room even if there are several
-            foreach (Gap gap in Gap.GapList.OrderBy(g => Rand.Int(int.MaxValue)))
+            if (mapEntityUpdateTick % GapUpdateInterval == 0)
             {
-                gap.Update(deltaTime, cam);
+                foreach (Gap gap in Gap.GapList.OrderBy(g => Rand.Int(int.MaxValue)))
+                {
+                    gap.Update(deltaTime * GapUpdateInterval, cam);
+                }
+            }
+
+            if (mapEntityUpdateTick % PoweredUpdateInterval == 0)
+            {
+                Powered.UpdatePower(deltaTime * PoweredUpdateInterval);
             }
 
 #if CLIENT
@@ -637,20 +605,35 @@ namespace Barotrauma
             GameMain.PerformanceCounter.AddElapsedTicks("Update:MapEntity:Misc", sw.ElapsedTicks);
             sw.Restart();
 #endif
-            Powered.UpdatePower(deltaTime);
-            foreach (Item item in Item.ItemList)
+
+            if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
             {
-                item.Update(deltaTime, cam);
+                foreach (Item item in Item.ItemList)
+                {
+                    if (GameMain.LuaCs.Game.updatePriorityItems.Contains(item)) continue;
+                    item.Update(deltaTime * MapEntityUpdateInterval, cam);
+                }
             }
 
-            UpdateAllProjSpecific(deltaTime);
+            foreach (var item in GameMain.LuaCs.Game.updatePriorityItems)
+            {
+                if (item.Removed) continue;
+
+                item.Update(deltaTime, cam);
+            }
 
 #if CLIENT
             sw.Stop();
             GameMain.PerformanceCounter.AddElapsedTicks("Update:MapEntity:Items", sw.ElapsedTicks);
             sw.Restart();
 #endif
-            Spawner?.Update();
+
+            if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
+            {
+                UpdateAllProjSpecific(deltaTime * MapEntityUpdateInterval);
+
+                Spawner?.Update();
+            }
         }
 
         static partial void UpdateAllProjSpecific(float deltaTime);
@@ -692,9 +675,6 @@ namespace Barotrauma
             List<MapEntity> entities = new List<MapEntity>();
             foreach (var element in parentElement.Elements())
             {
-#if CLIENT
-                GameMain.GameSession?.Campaign?.ThrowIfStartRoundCancellationRequested();
-#endif
                 string typeName = element.Name.ToString();
 
                 Type t;

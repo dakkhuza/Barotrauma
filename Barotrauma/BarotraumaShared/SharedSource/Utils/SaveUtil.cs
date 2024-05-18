@@ -8,7 +8,6 @@ using System.Xml.Linq;
 using System.Text.RegularExpressions;
 using Barotrauma.IO;
 using Microsoft.Xna.Framework;
-using System.Collections.Immutable;
 
 namespace Barotrauma
 {
@@ -19,7 +18,7 @@ namespace Barotrauma
 
 #if OSX
         //"/*user*/Library/Application Support/Daedalic Entertainment GmbH/" on Mac
-        public static readonly string DefaultSaveFolder = Path.Combine(
+        public static string SaveFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.Personal), 
             "Library",
             "Application Support",
@@ -28,13 +27,13 @@ namespace Barotrauma
 #else
         //"C:/Users/*user*/AppData/Local/Daedalic Entertainment GmbH/" on Windows
         //"/home/*user*/.local/share/Daedalic Entertainment GmbH/" on Linux
-        public static readonly string DefaultSaveFolder = Path.Combine(
+        public static string SaveFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Daedalic Entertainment GmbH",
             "Barotrauma");
 #endif
 
-        public static string DefaultMultiplayerSaveFolder = Path.Combine(DefaultSaveFolder, "Multiplayer");
+        public static string MultiplayerSaveFolder = Path.Combine(SaveFolder, "Multiplayer");
 
         public static readonly string SubmarineDownloadFolder = Path.Combine("Submarines", "Downloaded");
         public static readonly string CampaignDownloadFolder = Path.Combine("Data", "Saves", "Multiplayer_Downloaded");
@@ -44,9 +43,9 @@ namespace Barotrauma
         public static string TempPath
         {
 #if SERVER
-            get { return Path.Combine(GetSaveFolder(SaveType.Singleplayer), "temp_server"); }
+            get { return Path.Combine(SaveFolder, "temp_server"); }
 #else
-            get { return Path.Combine(GetSaveFolder(SaveType.Singleplayer), "temp"); }
+            get { return Path.Combine(SaveFolder, "temp"); }
 #endif
         }
 
@@ -199,10 +198,7 @@ namespace Barotrauma
             }
 
             //deleting a multiplayer save file -> also delete character data
-            var fullPath = Path.GetFullPath(Path.GetDirectoryName(filePath));
-
-            if (fullPath.Equals(Path.GetFullPath(DefaultMultiplayerSaveFolder)) ||
-                fullPath == Path.GetFullPath(GetSaveFolder(SaveType.Multiplayer)))
+            if (Path.GetFullPath(Path.GetDirectoryName(filePath)).Equals(Path.GetFullPath(MultiplayerSaveFolder)))
             {
                 string characterDataSavePath = MultiPlayerCampaign.GetCharacterDataSavePath(filePath);
                 if (File.Exists(characterDataSavePath))
@@ -219,69 +215,34 @@ namespace Barotrauma
             }
         }
 
-        public static string GetSaveFolder(SaveType saveType)
+        public static string GetSavePath(SaveType saveType, string saveName)
         {
-            string folder = string.Empty;
-
-            if (!string.IsNullOrEmpty(GameSettings.CurrentConfig.SavePath))
-            {
-                folder = GameSettings.CurrentConfig.SavePath;
-                if (saveType == SaveType.Multiplayer)
-                {
-                    folder = Path.Combine(folder, "Multiplayer");
-                }
-                if (!Directory.Exists(folder))
-                {
-                    DebugConsole.AddWarning($"Could not find the custom save folder \"{folder}\", creating the folder...");
-                    try
-                    {
-                        Directory.CreateDirectory(folder);
-                    }
-                    catch (Exception e)
-                    {
-                        DebugConsole.ThrowError($"Could not find the custom save folder \"{folder}\". Using the default save path instead.", e);
-                        folder = string.Empty;
-                    }
-                }
-            }
-            if (string.IsNullOrEmpty(folder))
-            {
-                folder = saveType == SaveType.Singleplayer ? DefaultSaveFolder : DefaultMultiplayerSaveFolder;
-            }
-            return folder;
+            string folder = saveType == SaveType.Singleplayer ? SaveFolder : MultiplayerSaveFolder;
+            return Path.Combine(folder, saveName);
         }
 
         public static IReadOnlyList<CampaignMode.SaveInfo> GetSaveFiles(SaveType saveType, bool includeInCompatible = true)
         {
-            string defaultFolder = saveType == SaveType.Singleplayer ? DefaultSaveFolder : DefaultMultiplayerSaveFolder;
-            if (!Directory.Exists(defaultFolder))
+            string folder = saveType == SaveType.Singleplayer ? SaveFolder : MultiplayerSaveFolder;
+            if (!Directory.Exists(folder))
             {
-                DebugConsole.Log("Save folder \"" + defaultFolder + " not found! Attempting to create a new folder...");
+                DebugConsole.Log("Save folder \"" + folder + " not found! Attempting to create a new folder...");
                 try
                 {
-                    Directory.CreateDirectory(defaultFolder);
+                    Directory.CreateDirectory(folder);
                 }
                 catch (Exception e)
                 {
-                    DebugConsole.ThrowError("Failed to create the folder \"" + defaultFolder + "\"!", e);
+                    DebugConsole.ThrowError("Failed to create the folder \"" + folder + "\"!", e);
                 }
             }
 
-            List<string> files = Directory.GetFiles(defaultFolder, "*.save", System.IO.SearchOption.TopDirectoryOnly).ToList();
-
-            var folder = GetSaveFolder(saveType);
-            if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
-            {
-                files.AddRange(Directory.GetFiles(folder, "*.save", System.IO.SearchOption.TopDirectoryOnly));
-            }
-
+            List<string> files = Directory.GetFiles(folder, "*.save", System.IO.SearchOption.TopDirectoryOnly).ToList();
             string legacyFolder = saveType == SaveType.Singleplayer ? LegacySaveFolder : LegacyMultiplayerSaveFolder;
             if (Directory.Exists(legacyFolder))
             {
                 files.AddRange(Directory.GetFiles(legacyFolder, "*.save", System.IO.SearchOption.TopDirectoryOnly));
             }
-
-            files = files.Distinct().ToList();
 
             List<CampaignMode.SaveInfo> saveInfos = new List<CampaignMode.SaveInfo>();   
             foreach (string file in files)
@@ -293,11 +254,10 @@ namespace Barotrauma
                 }
                 if (doc?.Root == null)
                 {
-                    saveInfos.Add(new CampaignMode.SaveInfo(
-                        FilePath: file,
-                        SaveTime: Option.None,
-                        SubmarineName: "",
-                        EnabledContentPackageNames: ImmutableArray<string>.Empty));
+                    saveInfos.Add(new CampaignMode.SaveInfo()
+                    {
+                        FilePath = file
+                    });
                 }
                 else
                 {
@@ -328,11 +288,13 @@ namespace Barotrauma
                         enabledContentPackageNames.Add(packageName.Replace(@"\|", "|"));                        
                     }
 
-                    saveInfos.Add(new CampaignMode.SaveInfo(
-                        FilePath: file,
-                        SaveTime: doc.Root.GetAttributeDateTime("savetime"),
-                        SubmarineName: doc?.Root?.GetAttributeStringUnrestricted("submarine", ""),
-                        EnabledContentPackageNames: enabledContentPackageNames.ToImmutableArray()));
+                    saveInfos.Add(new CampaignMode.SaveInfo()
+                    {
+                        FilePath = file,
+                        SubmarineName = doc?.Root?.GetAttributeStringUnrestricted("submarine", ""),
+                        SaveTime = doc.Root.GetAttributeInt("savetime", 0),
+                        EnabledContentPackageNames = enabledContentPackageNames.ToArray(),
+                    });
                 }
             }
             
@@ -343,7 +305,7 @@ namespace Barotrauma
         {
             fileName = ToolBox.RemoveInvalidFileNameChars(fileName);
 
-            string folder = GetSaveFolder(saveType);
+            string folder = saveType == SaveType.Singleplayer ? SaveFolder : MultiplayerSaveFolder;
             if (fileName == "Save_Default")
             {
                 fileName = TextManager.Get("SaveFile.DefaultName").Value;
