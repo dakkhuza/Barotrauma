@@ -329,6 +329,11 @@ namespace Barotrauma
             /// </summary>
             public readonly ImmutableArray<Identifier> ResistanceFor;
 
+            /// <summary>
+            /// List of limb types that the resistance applies to. If empty, the resistance applies to the whole body.
+            /// </summary>
+            public readonly ImmutableArray<LimbType> ResistanceLimbs;
+
             [Serialize(0.0f, IsPropertySaveable.No,
                 description: "The amount of resistance to the afflictions specified by ResistanceFor to apply at this effect's lowest strength.")]
             public float MinResistance { get; private set; }
@@ -359,6 +364,14 @@ namespace Barotrauma
                 description: "Color to tint the affected character's entire body with at this effect's highest strength. The alpha channel is used to determine how much to tint the character.")]
             public Color MaxBodyTint { get; private set; }
 
+            [Serialize(0.0f, IsPropertySaveable.No,
+                description: "Range of the \"thermal goggles overlay\" enabled by the affliction.")]
+            public float ThermalOverlayRange { get; private set; }
+
+            [Serialize("255,0,0,255", IsPropertySaveable.No,
+                description: $"Color of the \"thermal goggles overlay\" enabled by the affliction. Only has an effect if {nameof(ThermalOverlayRange)} is larger than 0.")]
+            public Color ThermalOverlayColor { get; private set; }
+
             /// <summary>
             /// StatType that will be applied to the affected character when the effect is active that is proportional to the effect's strength.
             /// </summary>
@@ -385,7 +398,7 @@ namespace Barotrauma
                 public readonly float MinValue;
 
                 /// <summary>
-                /// Minimum value to apply
+                /// Maximum value to apply
                 /// </summary>
                 public readonly float MaxValue;
 
@@ -423,6 +436,8 @@ namespace Barotrauma
                 SerializableProperty.DeserializeProperties(this, element);
 
                 ResistanceFor = element.GetAttributeIdentifierArray("resistancefor", Array.Empty<Identifier>())!.ToImmutableArray();
+                ResistanceLimbs = element.GetAttributeEnumArray<LimbType>("resistancelimbs", Array.Empty<LimbType>()).ToImmutableArray();
+                
                 BlockTransformation = element.GetAttributeIdentifierArray("blocktransformation", Array.Empty<Identifier>())!.ToImmutableArray();
 
                 var afflictionStatValues = new Dictionary<StatTypes, AppliedStatValue>();
@@ -594,7 +609,7 @@ namespace Barotrauma
                 }
                 else
                 {
-                    MinInterval = Math.Max(element.GetAttributeFloat(nameof(MinInterval), 1.0f), 1.0f);
+                    MinInterval = Math.Max(element.GetAttributeFloat(nameof(MinInterval), 1.0f), 0.1f);
                     MaxInterval = Math.Max(element.GetAttributeFloat(nameof(MaxInterval), 1.0f), MinInterval);
                     MinStrength = Math.Max(element.GetAttributeFloat(nameof(MinStrength), 0f), 0f);
                     MaxStrength = Math.Max(element.GetAttributeFloat(nameof(MaxStrength), MinStrength), MinStrength);
@@ -612,6 +627,7 @@ namespace Barotrauma
         public static readonly Identifier SpaceHerpesType = "spaceherpes".ToIdentifier();
         public static readonly Identifier AlienInfectedType = "alieninfected".ToIdentifier();
         public static readonly Identifier InvertControlsType = "invertcontrols".ToIdentifier();
+        public static readonly Identifier DisguisedAsHuskType = "disguiseashusk".ToIdentifier();
 
         public static AfflictionPrefab InternalDamage => Prefabs["internaldamage"];
         public static AfflictionPrefab BiteWounds => Prefabs["bitewounds"];
@@ -624,7 +640,7 @@ namespace Barotrauma
         public static AfflictionPrefab OrganDamage => Prefabs["organdamage"];
         public static AfflictionPrefab Stun => Prefabs[StunType];
         public static AfflictionPrefab RadiationSickness => Prefabs["radiationsickness"];
-
+        public static AfflictionPrefab HuskInfection => Prefabs["huskinfection"];
 
         public static readonly PrefabCollection<AfflictionPrefab> Prefabs = new PrefabCollection<AfflictionPrefab>();
 
@@ -747,6 +763,12 @@ namespace Barotrauma
         /// Also effects when the affliction is shown in the suitable treatments list.
         /// </summary>
         public readonly float TreatmentThreshold;
+
+        /// <summary>
+        /// How strong the affliction needs to be for treatment suggestions to be shown in the health interface.
+        /// Defaults to <see cref="TreatmentThreshold"/>.
+        /// </summary>
+        public readonly float TreatmentSuggestionThreshold;
 
         /// <summary>
         /// Bots will not try to treat the affliction if the character has any of these afflictions
@@ -898,7 +920,10 @@ namespace Barotrauma
 
             if (element.GetAttribute("nameidentifier") != null)
             {
-                Name = TextManager.Get(element.GetAttributeString("nameidentifier", string.Empty)).Fallback(Name);
+                string nameIdentifier = element.GetAttributeString("nameidentifier", string.Empty);
+                Name = TextManager.Get(nameIdentifier)
+                    .Fallback(TextManager.Get($"AfflictionName.{nameIdentifier}"))
+                    .Fallback(Name);
             }
 
             LimbSpecific = element.GetAttributeBool("limbspecific", false);
@@ -922,6 +947,7 @@ namespace Barotrauma
             ShowInHealthScannerThreshold = element.GetAttributeFloat(nameof(ShowInHealthScannerThreshold), 
                 Math.Max(ActivationThreshold, AfflictionType == "talentbuff" ? float.MaxValue : ShowIconToOthersThreshold));
             TreatmentThreshold = element.GetAttributeFloat(nameof(TreatmentThreshold), Math.Max(ActivationThreshold, 10.0f));
+            TreatmentSuggestionThreshold = element.GetAttributeFloat(nameof(TreatmentSuggestionThreshold), TreatmentThreshold);
 
             DamageOverlayAlpha  = element.GetAttributeFloat(nameof(DamageOverlayAlpha), 0.0f);
             BurnOverlayAlpha    = element.GetAttributeFloat(nameof(BurnOverlayAlpha), 0.0f);

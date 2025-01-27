@@ -33,6 +33,11 @@ namespace Barotrauma
 
         public readonly CharacterTeamType OutpostTeam;
 
+        /// <summary>
+        /// Is this location type considered valid for e.g. events and missions that are should be available in "any outpost"
+        /// </summary>
+        public bool IsAnyOutpost;
+
         public readonly List<LocationTypeChange> CanChangeTo = new List<LocationTypeChange>();
 
         public readonly ImmutableArray<Identifier> MissionIdentifiers;
@@ -113,6 +118,7 @@ namespace Barotrauma
         }
 
         public float StoreMaxReputationModifier { get; } = 0.1f;
+        public float StoreMinReputationModifier { get; } = 1.0f;
         public float StoreSellPriceModifier { get; } = 0.3f;
         public float DailySpecialPriceModifier { get; } = 0.5f;
         public float RequestGoodPriceModifier { get; } = 2f;
@@ -160,6 +166,8 @@ namespace Barotrauma
 
             IgnoreGenericEvents = element.GetAttributeBool(nameof(IgnoreGenericEvents), false);
 
+            IsAnyOutpost = element.GetAttributeBool(nameof(IsAnyOutpost), def: HasOutpost);
+
             string teamStr = element.GetAttributeString("outpostteam", "FriendlyNPC");
             Enum.TryParse(teamStr, out OutpostTeam);
 
@@ -179,7 +187,7 @@ namespace Barotrauma
                         try
                         {
                             var path = ContentPath.FromRaw(element.ContentPackage, rawPath.Trim());
-                            names.AddRange(File.ReadAllLines(path.Value).ToList());
+                            names.AddRange(File.ReadAllLines(path.Value, catchUnauthorizedAccessExceptions: false).ToList());
                         }
                         catch (Exception e)
                         {
@@ -257,6 +265,7 @@ namespace Barotrauma
                         break;
                     case "store":
                         StoreMaxReputationModifier = subElement.GetAttributeFloat("maxreputationmodifier", StoreMaxReputationModifier);
+                        StoreMinReputationModifier = subElement.GetAttributeFloat("minreputationmodifier", StoreMaxReputationModifier);
                         StoreSellPriceModifier = subElement.GetAttributeFloat("sellpricemodifier", StoreSellPriceModifier);
                         DailySpecialPriceModifier = subElement.GetAttributeFloat("dailyspecialpricemodifier", DailySpecialPriceModifier);
                         RequestGoodPriceModifier = subElement.GetAttributeFloat("requestgoodpricemodifier", RequestGoodPriceModifier);

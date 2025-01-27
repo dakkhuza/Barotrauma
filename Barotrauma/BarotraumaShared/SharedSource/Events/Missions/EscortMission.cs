@@ -61,7 +61,7 @@ namespace Barotrauma
             if (descriptionWithoutReward != null) { description = descriptionWithoutReward.Replace("[reward]", rewardText); }
         }
 
-        public override int GetBaseReward(Submarine sub)
+        public override float GetBaseReward(Submarine sub)
         {
             if (sub != missionSub)
             {
@@ -192,7 +192,6 @@ namespace Barotrauma
             foreach (ContentXElement element in characterConfig.Elements())
             {
                 string escortIdentifier = element.GetAttributeString("escortidentifier", string.Empty);
-                string colorIdentifier = element.GetAttributeString("color", string.Empty);
                 for (int k = 0; k < scalingCharacterCount; k++)
                 {
                     // for each element defined, we need to initialize that type of character equal to the scaling escorted character count

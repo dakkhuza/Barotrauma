@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Linq;
+using Barotrauma.Extensions;
 
 namespace Barotrauma
 {
@@ -24,11 +25,22 @@ namespace Barotrauma
         NotDefined
     }
 
+    [Flags]
     public enum AttackTarget
     {
-        Any,
-        Character,
-        Structure   // Including hulls etc. Evaluated as anything but a character.
+        Any = 0,
+        /// <summary>
+        /// Characters only
+        /// </summary>
+        Character = 1,
+        /// <summary>
+        /// Structures and hulls, but also items (for backwards support)!
+        /// </summary>
+        Structure = 2,
+        /// <summary>
+        /// Items only
+        /// </summary>
+        Item = 4
     }
 
     public enum AIBehaviorAfterAttack
@@ -185,7 +197,22 @@ namespace Barotrauma
         /// <summary>
         /// Used for multiplying all the damage.
         /// </summary>
-        public float DamageMultiplier { get; set; } = 1;
+        public float DamageMultiplier
+        {
+            get => _damageMultiplier ?? initialDamageMultiplier;
+            set
+            {
+                if (!_damageMultiplier.HasValue)
+                {
+                    SetInitialDamageMultiplier(value);
+                }
+                _damageMultiplier = value;
+            }
+        }
+        private float? _damageMultiplier;
+        private float initialDamageMultiplier = 1.0f;
+        public void ResetDamageMultiplier() => _damageMultiplier = initialDamageMultiplier;
+        public void SetInitialDamageMultiplier(float value) => initialDamageMultiplier = value;
 
         /// <summary>
         /// Used for multiplying all the ranges.
@@ -262,6 +289,8 @@ namespace Barotrauma
 
         [Serialize("0.0, 0.0", IsPropertySaveable.Yes, description: "Applied to the main limb. In world space coordinates(i.e. 0, 1 pushes the character upwards a bit). The attacker's facing direction is taken into account."), Editable]
         public Vector2 RootForceWorldEnd { get; private set; }
+
+        public bool HasRootForce => RootForceWorldStart != Vector2.Zero || RootForceWorldMiddle != Vector2.Zero || RootForceWorldEnd != Vector2.Zero;
 
         [Serialize(TransitionMode.Linear, IsPropertySaveable.Yes, description:"Applied to the main limb. The transition smoothing of the applied force."), Editable]
         public TransitionMode RootTransitionEasing { get; private set; }
@@ -816,15 +845,28 @@ namespace Barotrauma
             return true;
         }
 
-        public bool IsValidTarget(AttackTarget targetType) => TargetType == AttackTarget.Any || TargetType == targetType;
+        public bool IsValidTarget(AttackTarget targetType) => TargetType == AttackTarget.Any || TargetType.HasAnyFlag(targetType);
 
         public bool IsValidTarget(Entity target)
         {
             return TargetType switch
             {
                 AttackTarget.Character => target is Character,
-                AttackTarget.Structure => !(target is Character),
-                _ => true,
+                AttackTarget.Structure => target is Structure or Hull or Item, // Items are intentionally included for backwards-support.
+                AttackTarget.Item => target is Item,
+                _ => IsValidTarget(GetAttackTargetTypeFromEntity(target))
+            };
+        }
+        
+        private static AttackTarget GetAttackTargetTypeFromEntity(Entity entity)
+        {
+            return entity switch
+            {
+                Character => AttackTarget.Character,
+                Item => AttackTarget.Item,
+                Structure => AttackTarget.Structure,
+                Hull => AttackTarget.Structure,
+                _ => AttackTarget.Any
             };
         }
 

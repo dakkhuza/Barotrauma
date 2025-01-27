@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using Barotrauma.Extensions;
 using Microsoft.Xna.Framework;
 using System;
@@ -82,6 +82,7 @@ namespace Barotrauma
                     ShowOffensiveServerPrompt = true,
                     TutorialSkipWarning = true,
                     CorpseDespawnDelay = 600,
+                    CorpseDespawnDelayPvP = 60,
                     CorpsesPerSubDespawnThreshold = 5,
 #if OSX
                     UseDualModeSockets = false,
@@ -159,6 +160,7 @@ namespace Barotrauma
             public bool ShowOffensiveServerPrompt;
             public bool TutorialSkipWarning;
             public int CorpseDespawnDelay;
+            public int CorpseDespawnDelayPvP;
             public int CorpsesPerSubDespawnThreshold;
             public bool UseDualModeSockets;
             public bool DisableInGameHints;
@@ -186,10 +188,11 @@ namespace Barotrauma
                 {
                     GraphicsSettings gfxSettings = new GraphicsSettings
                     {
+                        Display = 0,
                         RadialDistortion = true,
                         InventoryScale = 1.0f,
                         LightMapScale = 1.0f,
-                        VisibleLightLimit = 50,
+                        VisibleLightLimit = 100,
                         TextScale = 1.0f,
                         HUDScale = 1.0f,
                         Specularity = true,
@@ -216,6 +219,7 @@ namespace Barotrauma
                     return retVal;
                 }
 
+                public int Display;
                 public int Width;
                 public int Height;
                 public bool VSync;
@@ -306,6 +310,7 @@ namespace Barotrauma
                     new Dictionary<InputType, KeyOrMouse>()
                     {
                         { InputType.Run, Keys.LeftShift },
+                        { InputType.ToggleRun, Keys.None },
                         { InputType.Attack, Keys.R },
                         { InputType.Crouch, Keys.LeftControl },
                         { InputType.Grab, Keys.G },
@@ -564,7 +569,8 @@ namespace Barotrauma
             bool setGraphicsMode =
                 resolutionChanged ||
                 currentConfig.Graphics.VSync != newConfig.Graphics.VSync ||
-                currentConfig.Graphics.DisplayMode != newConfig.Graphics.DisplayMode;
+                currentConfig.Graphics.DisplayMode != newConfig.Graphics.DisplayMode ||
+                currentConfig.Graphics.Display != newConfig.Graphics.Display;
 
 #if CLIENT
             bool keybindsChanged = false;

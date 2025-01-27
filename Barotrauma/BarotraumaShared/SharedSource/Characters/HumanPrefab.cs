@@ -33,6 +33,12 @@ namespace Barotrauma
         [Serialize(0, IsPropertySaveable.No)]
         public int ExperiencePoints { get; private set; }
 
+        [Serialize(0, IsPropertySaveable.No)]
+        public int BaseSalary { get; private set; }
+
+        [Serialize(1f, IsPropertySaveable.No)]
+        public float SalaryMultiplier { get; private set; }
+
         private readonly HashSet<Identifier> tags = new HashSet<Identifier>();
 
         [Serialize("", IsPropertySaveable.Yes)]
@@ -93,6 +99,9 @@ namespace Barotrauma
                 }
             }
         }
+
+        [Serialize(false, IsPropertySaveable.No, description: "If enabled, the NPC will not spawn if the specified spawn point tags can't be found.")]
+        public bool RequireSpawnPointTag { get; protected set; }
 
         [Serialize(CampaignMode.InteractionType.None, IsPropertySaveable.No)]
         public CampaignMode.InteractionType CampaignInteractionType { get; protected set; }
@@ -244,8 +253,8 @@ namespace Barotrauma
                     float newSkill = skill.Level * SkillMultiplier;
                     skill.IncreaseSkill(newSkill - skill.Level, increasePastMax: false);
                 }
-                characterInfo.Salary = characterInfo.CalculateSalary();
             }
+            characterInfo.Salary = characterInfo.CalculateSalary(BaseSalary, SalaryMultiplier);
             characterInfo.HumanPrefabIds = (NpcSetIdentifier, Identifier);
             characterInfo.GiveExperience(ExperiencePoints);
             return characterInfo;

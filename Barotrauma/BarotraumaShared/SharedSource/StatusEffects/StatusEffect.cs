@@ -122,7 +122,11 @@ namespace Barotrauma
             /// <summary>
             /// Last limb of the character the effect is being used on.
             /// </summary>
-            LastLimb = 1024
+            LastLimb = 1024,
+            /// <summary>
+            /// All entities (items, structures) this item is linked to. Only valid on items.
+            /// </summary>
+            LinkedEntities = 2048
         }
 
         /// <summary>
@@ -210,9 +214,17 @@ namespace Barotrauma
             public readonly float Impulse;
             public readonly float RotationRad;
             /// <summary>
-            /// How many items to spawn.
+            /// Minimum number of items to spawn. Use "Count" to spawn a fixed number of items.
             /// </summary>
-            public readonly int Count;
+            public readonly int MinCount;
+            /// <summary>
+            /// Maximum number of items to spawn. Use "Count" to spawn a fixed number of items.
+            /// </summary>
+            public readonly int MaxCount;
+            /// <summary>
+            /// Probability of spawning the item(s). 0-1.
+            /// </summary>
+            public readonly float Probability;
             /// <summary>
             /// Random offset added to the spawn position in pixels.
             /// </summary>
@@ -273,7 +285,16 @@ namespace Barotrauma
                 Condition = MathHelper.Clamp(element.GetAttributeFloat("condition", 1.0f), 0.0f, 1.0f);
 
                 RotationRad = MathHelper.ToRadians(element.GetAttributeFloat("rotation", 0.0f));
-                Count = element.GetAttributeInt("count", 1);
+
+                int fixedCount = element.GetAttributeInt("count", 1);
+                MinCount = element.GetAttributeInt(nameof(MinCount), fixedCount);
+                MaxCount = element.GetAttributeInt(nameof(MaxCount), fixedCount);
+                if (MinCount > MaxCount)
+                {
+                    DebugConsole.AddWarning($"Potential error in a StatusEffect {parentDebugName}: mincount is larger than maxcount.");
+                }
+                Probability = element.GetAttributeFloat(nameof(Probability), 1.0f);
+
                 Spread = element.GetAttributeFloat("spread", 0f);
                 AimSpreadRad = MathHelper.ToRadians(element.GetAttributeFloat("aimspread", 0f));
                 Equip = element.GetAttributeBool("equip", false);
@@ -290,6 +311,11 @@ namespace Barotrauma
                     RotationType = element.GetAttributeEnum("rotationtype", RotationRad != 0 ? SpawnRotationType.This : SpawnRotationType.Target);
                 }
                 InheritEventTags = element.GetAttributeBool(nameof(InheritEventTags), false);
+            }
+
+            public int GetCount(Rand.RandSync randSync)
+            {
+                return Rand.Range(MinCount, MaxCount + 1, randSync);
             }
         }
 
@@ -357,6 +383,11 @@ namespace Barotrauma
             /// Meaning, the higher the skill level, the less the skill is increased.
             /// </summary>
             public readonly bool Proportional;
+            /// <summary>
+            /// Should the skill increase popup be always shown regardless of how much the skill increases?
+            /// Normally it's only shown when the skill reaches the next integer value.
+            /// </summary>
+            public readonly bool AlwayShowNotification;
 
             public GiveSkill(ContentXElement element, string parentDebugName)
             {
@@ -365,6 +396,7 @@ namespace Barotrauma
                 TriggerTalents = element.GetAttributeBool(nameof(TriggerTalents), true);
                 UseDeltaTime = element.GetAttributeBool(nameof(UseDeltaTime), false);
                 Proportional = element.GetAttributeBool(nameof(Proportional), false);
+                AlwayShowNotification = element.GetAttributeBool(nameof(AlwayShowNotification), false);
 
                 if (SkillIdentifier == Identifier.Empty)
                 {
@@ -403,7 +435,7 @@ namespace Barotrauma
             public bool TransferInventory { get; private set; }
 
             [Serialize(0, IsPropertySaveable.No, description:
-                "The maximum number of creatures of the given species and team that can exist in the current level before this status effect stops spawning any more.")]
+                "The maximum number of creatures of the given species and team that can exist per team in the current level before this status effect stops spawning any more.")]
             public int TotalMaxCount { get; private set; }
 
             [Serialize(0, IsPropertySaveable.No, description: "Amount of stun to apply on the spawned character.")]
@@ -437,6 +469,9 @@ namespace Barotrauma
 
             [Serialize(false, IsPropertySaveable.No)]
             public bool InheritEventTags { get; private set; }
+            
+            [Serialize(false, IsPropertySaveable.No, description: "Should the character team be inherited from the entity that owns the status effect?")]
+            public bool InheritTeam { get; private set; }
 
             public CharacterSpawnInfo(ContentXElement element, string parentDebugName)
             {
@@ -606,6 +641,11 @@ namespace Barotrauma
         private readonly bool removeItem, dropContainedItems, dropItem, removeCharacter, breakLimb, hideLimb;
         private readonly float hideLimbTimer;
 
+        /// <summary>
+        /// Identifier of a container the character's items should be moved into when the character is removed. Only valid if the effect removes the character.
+        /// </summary>
+        private readonly Identifier containerForItemsOnCharacterRemoval;
+
         public readonly ActionType type = ActionType.OnActive;
 
         private readonly List<Explosion> explosions;
@@ -616,11 +656,26 @@ namespace Barotrauma
 
         private readonly List<ItemSpawnInfo> spawnItems;
 
+
+        /// <summary>
+        /// If set, the character targeted by this effect will send the corresponding localized text that has the specified identifier in the chat.
+        /// </summary>
+        private readonly Identifier forceSayIdentifier = Identifier.Empty;
+        /// <summary>
+        /// If set to true, the character targeted by this effect's "forcesay" command will send their message in the radio. 
+        /// </summary>
+        private readonly bool forceSayInRadio;
+
         /// <summary>
         /// If enabled, one of the items this effect is configured to spawn is selected randomly, as opposed to spawning all of them.
         /// </summary>
         private readonly bool spawnItemRandomly;
         private readonly List<CharacterSpawnInfo> spawnCharacters;
+
+        /// <summary>
+        /// If enabled, the effect removes all talents from the target and refunds the talent points.
+        /// </summary>
+        public readonly bool refundTalents;
 
         public readonly List<GiveTalentInfo> giveTalentInfos;
 
@@ -791,7 +846,7 @@ namespace Barotrauma
 
         protected StatusEffect(ContentXElement element, string parentDebugName)
         {
-            tags = new HashSet<Identifier>(element.GetAttributeString("tags", "").Split(',').ToIdentifiers());
+            tags = new HashSet<Identifier>(element.GetAttributeIdentifierArray("tags", Array.Empty<Identifier>()));
             OnlyInside = element.GetAttributeBool("onlyinside", false);
             OnlyOutside = element.GetAttributeBool("onlyoutside", false);
             OnlyWhenDamagedByPlayer = element.GetAttributeBool("onlyplayertriggered", element.GetAttributeBool("onlywhendamagedbyplayer", false));
@@ -966,7 +1021,8 @@ namespace Barotrauma
                         dropItem = true;
                         break;
                     case "removecharacter":
-                        removeCharacter = true;
+                        removeCharacter = true; 
+                        containerForItemsOnCharacterRemoval = subElement.GetAttributeIdentifier("moveitemstocontainer", Identifier.Empty);
                         break;
                     case "breaklimb":
                         breakLimb = true;
@@ -986,6 +1042,7 @@ namespace Barotrauma
                         }
                         requiredItems.Add(newRequiredItem);
                         break;
+                    case "requiredafflictions":
                     case "requiredaffliction":
                         requiredAfflictions ??= new HashSet<(Identifier, float)>();
                         Identifier[] ids = subElement.GetAttributeIdentifierArray("identifier", null) ?? subElement.GetAttributeIdentifierArray("type", Array.Empty<Identifier>());
@@ -1093,6 +1150,9 @@ namespace Barotrauma
                             giveTalentInfos.Add(newGiveTalentInfo);
                         }
                         break;
+                    case "refundtalents":
+                        refundTalents = true;
+                        break;
                     case "aitrigger":
                         aiTriggers ??= new List<AITrigger>();
                         aiTriggers.Add(new AITrigger(subElement));
@@ -1134,6 +1194,10 @@ namespace Barotrauma
                         animationsToTrigger.Add(new AnimLoadInfo(animType, file, priority, expectedSpeciesNames.ToImmutableArray()));
                         
                         break;
+                    case "forcesay":
+                        forceSayIdentifier = subElement.GetAttributeIdentifier("message", Identifier.Empty);
+                        forceSayInRadio = subElement.GetAttributeBool("sayinradio", false);
+                        break;
                 }
             }
             InitProjSpecific(element, parentDebugName);
@@ -1150,9 +1214,9 @@ namespace Barotrauma
         {
             foreach (var (propertyName, value) in PropertyEffects)
             {
-                if (propertyName == "condition" && value.GetType() == typeof(float))
+                if (ChangesItemCondition(propertyName, value, out float conditionValue))
                 {
-                    return (float)value < 0.0f || (setValue && (float)value <= 0.0f);
+                    return conditionValue < 0.0f || (setValue && conditionValue <= 0.0f);
                 }
             }
             return false;
@@ -1162,11 +1226,29 @@ namespace Barotrauma
         {
             foreach (var (propertyName, value) in PropertyEffects)
             {
-                if (propertyName == "condition" && value.GetType() == typeof(float))
+                if (ChangesItemCondition(propertyName, value, out float conditionValue))
                 {
-                    return (float)value > 0.0f || (setValue && (float)value > 0.0f);
+                    return conditionValue > 0.0f || (setValue && conditionValue > 0.0f);
                 }
             }
+            return false;
+        }
+
+        private bool ChangesItemCondition(Identifier propertyName, object value, out float conditionValue)
+        {
+            if (propertyName == "condition")
+            {
+                switch (value)
+                {
+                    case float f:
+                        conditionValue = f;
+                        return true;
+                    case int i:
+                        conditionValue = i;
+                        return true;
+                }
+            }
+            conditionValue = 0.0f;
             return false;
         }
 
@@ -1404,7 +1486,7 @@ namespace Barotrauma
         {
             if (OnlyInside && itemComponent.Item.CurrentHull == null) { return false; }
             if (OnlyOutside && itemComponent.Item.CurrentHull != null) { return false; }
-            if (!TargetItemComponent.IsNullOrEmpty() && itemComponent.Name != TargetItemComponent) { return false; }
+            if (!TargetItemComponent.IsNullOrEmpty() && !itemComponent.Name.Equals(TargetItemComponent, StringComparison.OrdinalIgnoreCase)) { return false; }
             if (TargetIdentifiers == null) { return true; }
             if (TargetIdentifiers.Contains("itemcomponent")) { return true; }
             if (itemComponent.Item.HasTag(TargetIdentifiers)) { return true; }
@@ -1676,15 +1758,8 @@ namespace Barotrauma
             {
                 for (int i = 0; i < targets.Count; i++)
                 {
-                    var target = targets[i];
-                    if (target is Character character)
-                    {
-                        Entity.Spawner?.AddEntityToRemoveQueue(character);
-                    }
-                    else if (target is Limb limb)
-                    {
-                        Entity.Spawner?.AddEntityToRemoveQueue(limb.character);
-                    }
+                    Character targetCharacter = GetCharacterFromTarget(targets[i]);
+                    if (targetCharacter != null) { RemoveCharacter(targetCharacter); }
                 }
             }
             if (breakLimb || hideLimb)
@@ -1875,7 +1950,7 @@ namespace Barotrauma
 
                 if (talentTriggers != null)
                 {
-                    Character targetCharacter = CharacterFromTarget(target);
+                    Character targetCharacter = GetCharacterFromTarget(target);
                     if (targetCharacter != null && !targetCharacter.Removed)
                     {
                         foreach (Identifier talentTrigger in talentTriggers)
@@ -1887,6 +1962,27 @@ namespace Barotrauma
                 
                 TryTriggerAnimation(target, entity);
 
+                if (!forceSayIdentifier.IsEmpty) 
+                {
+                    LocalizedString messageToSay = TextManager.Get(forceSayIdentifier).Fallback(forceSayIdentifier.Value);
+
+                    if (!messageToSay.IsNullOrEmpty() && target is Character targetCharacter && targetCharacter.SpeechImpediment < 100.0f && !targetCharacter.IsDead)
+                    {
+                        ChatMessageType messageType = ChatMessageType.Default;
+                        bool canUseRadio = ChatMessage.CanUseRadio(targetCharacter, out WifiComponent radio);
+                        if (canUseRadio && forceSayInRadio)
+                        {
+                            messageType = ChatMessageType.Radio;
+                        }
+#if SERVER
+                        GameMain.Server?.SendChatMessage(messageToSay.Value, messageType, senderClient: null, targetCharacter);
+#elif CLIENT
+                        AIChatMessage message = new AIChatMessage(messageToSay.Value, messageType);
+                        targetCharacter.SendSinglePlayerMessage(message, canUseRadio, radio);
+#endif
+                    }
+                }
+
                 if (isNotClient)
                 {
                     // these effects do not need to be run clientside, as they are replicated from server to clients anyway
@@ -1894,7 +1990,7 @@ namespace Barotrauma
                     {
                         foreach (int giveExperience in giveExperiences)
                         {
-                            Character targetCharacter = CharacterFromTarget(target);
+                            Character targetCharacter = GetCharacterFromTarget(target);
                             if (targetCharacter != null && !targetCharacter.Removed)
                             {
                                 targetCharacter?.Info?.GiveExperience(giveExperience);
@@ -1904,7 +2000,7 @@ namespace Barotrauma
 
                     if (giveSkills != null)
                     {
-                        Character targetCharacter = CharacterFromTarget(target);
+                        Character targetCharacter = GetCharacterFromTarget(target);
                         if (targetCharacter is { Removed: false })
                         {
                             foreach (GiveSkill giveSkill in giveSkills)
@@ -1914,11 +2010,11 @@ namespace Barotrauma
 
                                 if (giveSkill.Proportional)
                                 {
-                                    targetCharacter.Info?.ApplySkillGain(skillIdentifier, amount, !giveSkill.TriggerTalents);
+                                    targetCharacter.Info?.ApplySkillGain(skillIdentifier, amount, !giveSkill.TriggerTalents, forceNotification: giveSkill.AlwayShowNotification);
                                 }
                                 else
                                 {
-                                    targetCharacter.Info?.IncreaseSkillLevel(skillIdentifier, amount, !giveSkill.TriggerTalents);
+                                    targetCharacter.Info?.IncreaseSkillLevel(skillIdentifier, amount, !giveSkill.TriggerTalents, forceNotification: giveSkill.AlwayShowNotification);
                                 }
 
                                 Identifier GetRandomSkill()
@@ -1929,9 +2025,17 @@ namespace Barotrauma
                         }
                     }
 
+                    if (refundTalents)
+                    {
+                        if (GetCharacterFromTarget(target) is { Removed: false } c)
+                        {
+                            c.Info?.AddRefundPoints(1);
+                        }
+                    }
+
                     if (giveTalentInfos != null)
                     {
-                        Character targetCharacter = CharacterFromTarget(target);
+                        Character targetCharacter = GetCharacterFromTarget(target);
                         if (targetCharacter?.Info == null) { continue; }
                         if (!TalentTree.JobTalentTrees.TryGet(targetCharacter.Info.Job.Prefab.Identifier, out TalentTree characterTalentTree)) { continue; }
 
@@ -2010,11 +2114,38 @@ namespace Barotrauma
                     foreach (CharacterSpawnInfo characterSpawnInfo in spawnCharacters)
                     {
                         var characters = new List<Character>();
+                        
+                        CharacterTeamType? inheritedTeam = null;
+                        if (characterSpawnInfo.InheritTeam)
+                        {
+                            bool isPvP = GameMain.GameSession?.GameMode?.Preset == GameModePreset.PvP;
+                            inheritedTeam = entity switch
+                            {
+                                Character c => c.TeamID,
+                                Item it => it.GetRootInventoryOwner() is Character owner ? owner.TeamID : GetTeamFromSubmarine(it),
+                                MapEntity e => GetTeamFromSubmarine(e),
+                                _ => null
+                                // Default to Team1, when we can't deduce the team (for example when spawning outside the sub AND character inventory).
+                            } ?? (isPvP ? CharacterTeamType.None : CharacterTeamType.Team1);
+                            
+                            CharacterTeamType? GetTeamFromSubmarine(MapEntity e)
+                            {
+                                if (e.Submarine == null) { return null; }
+                                // Don't allow team FriendlyNPC in outposts, because if you buy a spawner item (such as husk container) from the store and choose to get it immediately, it will be spawned in the outpost.
+                                return !isPvP && e.Submarine.Info.IsOutpost && e.Submarine.TeamID == CharacterTeamType.FriendlyNPC ? 
+                                    CharacterTeamType.Team1 : e.Submarine.TeamID;
+                            }
+                        }
+                        
                         for (int i = 0; i < characterSpawnInfo.Count; i++)
                         {
                             Entity.Spawner.AddCharacterToSpawnQueue(characterSpawnInfo.SpeciesName, position + Rand.Vector(characterSpawnInfo.Spread, Rand.RandSync.Unsynced) + characterSpawnInfo.Offset,
                                 onSpawn: newCharacter =>
                                 {
+                                    if (inheritedTeam.HasValue)
+                                    {
+                                        newCharacter.SetOriginalTeamAndChangeTeam(inheritedTeam.Value, processImmediately: true);
+                                    }
                                     if (characterSpawnInfo.TotalMaxCount > 0)
                                     {
                                         if (Character.CharacterList.Count(c => c.SpeciesName == characterSpawnInfo.SpeciesName && c.TeamID == newCharacter.TeamID) > characterSpawnInfo.TotalMaxCount)
@@ -2119,9 +2250,13 @@ namespace Barotrauma
                         if (spawnItems.Count > 0)
                         {
                             var randomSpawn = spawnItems.GetRandomUnsynced();
-                            for (int i = 0; i < randomSpawn.Count; i++)
+                            int count = randomSpawn.GetCount(Rand.RandSync.Unsynced);
+                            if (Rand.Range(0.0f, 1.0f, Rand.RandSync.Unsynced) < randomSpawn.Probability)
                             {
-                                ProcessItemSpawnInfo(randomSpawn);
+                                for (int i = 0; i < count; i++)
+                                {
+                                    ProcessItemSpawnInfo(randomSpawn);
+                                }
                             }
                         }
                     }
@@ -2129,9 +2264,13 @@ namespace Barotrauma
                     {
                         foreach (ItemSpawnInfo itemSpawnInfo in spawnItems)
                         {
-                            for (int i = 0; i < itemSpawnInfo.Count; i++)
+                            int count = itemSpawnInfo.GetCount(Rand.RandSync.Unsynced);
+                            if (Rand.Range(0.0f, 1.0f, Rand.RandSync.Unsynced) < itemSpawnInfo.Probability)
                             {
-                                ProcessItemSpawnInfo(itemSpawnInfo);
+                                for (int i = 0; i < count; i++)
+                                {
+                                    ProcessItemSpawnInfo(itemSpawnInfo);
+                                }
                             }
                         }
                     }
@@ -2167,9 +2306,8 @@ namespace Barotrauma
                 intervalTimers ??= new Dictionary<Entity, float>();
                 intervalTimers[entity] = Interval;
             }
-
         }
-        private static Character CharacterFromTarget(ISerializableEntity target)
+        private static Character GetCharacterFromTarget(ISerializableEntity target)
         {
             Character targetCharacter = target as Character;
             if (targetCharacter == null)
@@ -2180,6 +2318,46 @@ namespace Barotrauma
                 }
             }
             return targetCharacter;
+        }
+
+        private void RemoveCharacter(Character character)
+        {
+            if (containerForItemsOnCharacterRemoval != Identifier.Empty)
+            {
+                ItemPrefab containerPrefab =
+                    ItemPrefab.Prefabs.Find(me => me.Tags.Contains(containerForItemsOnCharacterRemoval)) ??
+                    MapEntityPrefab.FindByIdentifier(containerForItemsOnCharacterRemoval) as ItemPrefab;
+
+                if (containerPrefab == null)
+                {
+                    DebugConsole.ThrowError($"Could not spawn a container for a removed character's items. No item found with the identifier or tag \"{containerForItemsOnCharacterRemoval}\"");
+                }
+                else
+                {
+                    Entity.Spawner?.AddItemToSpawnQueue(containerPrefab, character.WorldPosition, onSpawned: OnItemContainerSpawned);
+                }
+
+                void OnItemContainerSpawned(Item item)
+                {
+                    if (character.Inventory == null) { return; }
+
+                    item.UpdateTransform();
+                    item.AddTag("name:" + character.Name);
+                    if (character.Info?.Job is { } job) { item.AddTag($"job:{job.Name}"); }
+
+                    if (item.GetComponent<ItemContainer>() is not ItemContainer itemContainer) { return; }
+                    List<Item> inventoryItems = new List<Item>(character.Inventory.AllItemsMod);
+                    foreach (Item inventoryItem in inventoryItems)
+                    {
+                        if (!itemContainer.Inventory.TryPutItem(inventoryItem, user: null, createNetworkEvent: true))
+                        {
+                            //if the item couldn't be put inside the despawn container, just drop it
+                            inventoryItem.Drop(dropper: character, createNetworkEvent: true);
+                        }
+                    }
+                }
+            }
+            Entity.Spawner?.AddEntityToRemoveQueue(character);
         }
 
         void SpawnItem(ItemSpawnInfo chosenItemSpawnInfo, Entity entity, PhysicsBody sourceBody, Vector2 position, Entity targetEntity)
@@ -2303,8 +2481,14 @@ namespace Barotrauma
                                 {
                                     ignoredBodies = user?.AnimController.Limbs.Where(l => !l.IsSevered).Select(l => l.body.FarseerBody).ToList();
                                 }
-                                projectile.Shoot(user, spawnPos, spawnPos, rotation,
-                                    ignoredBodies: ignoredBodies, createNetworkEvent: true);
+                                float damageMultiplier = 1f;
+                                if (entity is Character character && sourceEntity is Limb { attack: Attack attack })
+                                {
+                                    attack.ResetDamageMultiplier();
+                                    attack.DamageMultiplier *= 1.0f + character.GetStatValue(StatTypes.NaturalRangedAttackMultiplier);
+                                    damageMultiplier = attack.DamageMultiplier;
+                                }
+                                projectile.Shoot(user, spawnPos, spawnPos, rotation, ignoredBodies: ignoredBodies, createNetworkEvent: true, damageMultiplier: damageMultiplier);
                                 projectile.Item.Submarine = projectile.LaunchSub = sourceEntity?.Submarine;
                             }
                             else if (newItem.body != null)
@@ -2339,7 +2523,7 @@ namespace Barotrauma
                                 return;
                             }
                         }
-                        if (inventory != null && (inventory.CanBePut(chosenItemSpawnInfo.ItemPrefab) || chosenItemSpawnInfo.SpawnIfInventoryFull))
+                        if (inventory != null && (inventory.CanProbablyBePut(chosenItemSpawnInfo.ItemPrefab) || chosenItemSpawnInfo.SpawnIfInventoryFull))
                         {
                             Entity.Spawner.AddItemToSpawnQueue(chosenItemSpawnInfo.ItemPrefab, inventory, spawnIfInventoryFull: chosenItemSpawnInfo.SpawnIfInventoryFull, onSpawned: item =>
                             {
@@ -2406,7 +2590,7 @@ namespace Barotrauma
                             foreach (Item item in thisInventory.AllItems)
                             {
                                 Inventory containedInventory = item.GetComponent<ItemContainer>()?.Inventory;
-                                if (containedInventory != null && (containedInventory.CanBePut(chosenItemSpawnInfo.ItemPrefab) || chosenItemSpawnInfo.SpawnIfInventoryFull))
+                                if (containedInventory != null && (containedInventory.CanProbablyBePut(chosenItemSpawnInfo.ItemPrefab) || chosenItemSpawnInfo.SpawnIfInventoryFull))
                                 {
                                     Entity.Spawner.AddItemToSpawnQueue(chosenItemSpawnInfo.ItemPrefab, containedInventory, spawnIfInventoryFull: chosenItemSpawnInfo.SpawnIfInventoryFull, onSpawned: (Item newItem) =>
                                     {
@@ -2439,7 +2623,7 @@ namespace Barotrauma
         {
             if (animationsToTrigger == null) { return; }
             // Could probably use a similar pattern in other places above too, but refactoring statuseffects is very volatile.
-            if ((CharacterFromTarget(target) ?? entity as Character) is Character targetCharacter)
+            if ((GetCharacterFromTarget(target) ?? entity as Character) is Character targetCharacter)
             {
                 foreach (AnimLoadInfo animLoadInfo in animationsToTrigger)
                 {
@@ -2660,18 +2844,21 @@ namespace Barotrauma
             if (limb == null) { return; }
             foreach (Affliction limbAffliction in limb.character.CharacterHealth.GetAllAfflictions())
             {
-                if (result.Afflictions != null && result.Afflictions.Any(a => a.Prefab == limbAffliction.Prefab) &&
+                if (result.Afflictions != null && 
+                    /* "affliction" is the affliction directly defined in the status effect (e.g. "5 internal damage (per second / per frame / however the effect is defined to run)"), 
+                     * "result" is how much we actually applied of that affliction right now (taking into account the elapsed time, resistances and such) */
+                    result.Afflictions.FirstOrDefault(a => a.Prefab == limbAffliction.Prefab) is Affliction resultAffliction &&
                     (!affliction.Prefab.LimbSpecific || limb.character.CharacterHealth.GetAfflictionLimb(affliction) == limb))
                 {
                     if (type == ActionType.OnUse || type == ActionType.OnSuccess)
                     {
                         limbAffliction.AppliedAsSuccessfulTreatmentTime = Timing.TotalTime;
-                        limb.character.TryAdjustHealerSkill(user, affliction: affliction);
+                        limb.character.TryAdjustHealerSkill(user, affliction: resultAffliction);
                     }
                     else if (type == ActionType.OnFailure)
                     {
                         limbAffliction.AppliedAsFailedTreatmentTime = Timing.TotalTime;
-                        limb.character.TryAdjustHealerSkill(user, affliction: affliction);
+                        limb.character.TryAdjustHealerSkill(user, affliction: resultAffliction);
                     }
                 }
             }
@@ -2695,7 +2882,7 @@ namespace Barotrauma
         public bool HasTag(Identifier tag)
         {
             if (tag == null) { return true; }
-            return tags.Contains(tag) || tags.Contains(tag);
+            return tags.Contains(tag);
         }
     }
 }

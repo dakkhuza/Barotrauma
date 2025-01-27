@@ -81,6 +81,7 @@ namespace Barotrauma
 
             // Ignore orders work a bit differently since the "unignore" order counters the "ignore" order
             var isUnignoreOrder = order.Identifier == Tags.UnignoreThis;
+            var isIgnoreOrder = order.Identifier == Tags.IgnoreThis;
             var orderPrefab = !isUnignoreOrder ? order.Prefab : OrderPrefab.Prefabs[Tags.IgnoreThis];
             ActiveOrder existingOrder = ActiveOrders.Find(o =>
                     o.Order.Prefab == orderPrefab && MatchesTarget(o.Order.TargetEntity, order.TargetEntity) &&
@@ -96,6 +97,14 @@ namespace Barotrauma
                 else
                 {
                     ActiveOrders.Remove(existingOrder);
+                    if (isIgnoreOrder && order.TargetEntity is Item targetItem)
+                    {
+                        foreach (var stackedItem in targetItem.GetStackedItems())
+                        {
+                            ActiveOrders.RemoveAll(o => o.Order.Prefab == orderPrefab && o.Order.TargetEntity == stackedItem);
+                            stackedItem.OrderedToBeIgnored = false;
+                        }
+                    }
                     return true;
                 }
             }
@@ -124,7 +133,18 @@ namespace Barotrauma
                         }
                     }
                 }
-                ActiveOrders.Add(new ActiveOrder(order, fadeOutTime));
+                if (isIgnoreOrder && order.TargetEntity is Item targetItem)
+                {
+                    foreach (var stackedItem in targetItem.GetStackedItems())
+                    {
+                        ActiveOrders.Add(new ActiveOrder(order.WithTargetEntity(stackedItem), fadeOutTime));
+                        stackedItem.OrderedToBeIgnored = true;
+                    }
+                }
+                else
+                {
+                    ActiveOrders.Add(new ActiveOrder(order, fadeOutTime));
+                }
 #if CLIENT
                 HintManager.OnActiveOrderAdded(order);
 #endif
@@ -182,7 +202,7 @@ namespace Barotrauma
             characterInfos.Remove(characterInfo);
         }
         
-        public void AddCharacter(Character character, bool sortCrewList = true)
+        public void AddCharacter(Character character)
         {
             if (character.Removed)
             {
@@ -216,10 +236,6 @@ namespace Barotrauma
             }
 #if CLIENT
             var characterComponent = AddCharacterToCrewList(character);
-            if (sortCrewList)
-            {
-                SortCrewList();
-            }
             if (character.CurrentOrders != null)
             {
                 foreach (var order in character.CurrentOrders)
@@ -324,7 +340,7 @@ namespace Barotrauma
                 Character character = Character.Create(info, spawnWaypoints[i].WorldPosition, info.Name);
                 InitializeCharacter(character, mainSubWaypoints[i], spawnWaypoints[i]);
 
-                AddCharacter(character, sortCrewList: false);
+                AddCharacter(character);
 #if CLIENT
                 if (IsSinglePlayer && (Character.Controlled == null || character.Info.LastControlled)) { Character.Controlled = character; }
 #endif
@@ -364,7 +380,7 @@ namespace Barotrauma
                 }
                 else if (!character.Info.StartItemsGiven)
                 {
-                    character.GiveJobItems(mainSubWaypoint);
+                    character.GiveJobItems(isPvPMode: GameMain.GameSession?.GameMode is PvPMode, mainSubWaypoint);
                     foreach (Item item in character.Inventory.AllItems)
                     {
                         //if the character is loaded from a human prefab with preconfigured items, its ID card gets assigned to the sub it spawns in
@@ -558,7 +574,7 @@ namespace Barotrauma
 
         public static IEnumerable<Character> GetCharactersSortedForOrder(Order order, IEnumerable<Character> characters, Character controlledCharacter, bool includeSelf, IEnumerable<Character> extraCharacters = null)
         {
-            var filteredCharacters = characters.Where(c => controlledCharacter == null || ((includeSelf || c != controlledCharacter) && c.TeamID == controlledCharacter.TeamID));
+            var filteredCharacters = characters.Where(c => c.Info != null && (controlledCharacter == null || ((includeSelf || c != controlledCharacter) && c.TeamID == controlledCharacter.TeamID)));
             if (extraCharacters != null)
             {
                 filteredCharacters = filteredCharacters.Union(extraCharacters);

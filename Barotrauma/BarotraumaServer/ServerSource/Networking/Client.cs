@@ -22,6 +22,8 @@ namespace Barotrauma.Networking
         public UInt16 LastRecvLobbyUpdate
             = NetIdUtils.GetIdOlderThan(GameMain.NetLobbyScreen.LastUpdateID);
 
+        public bool InitialLobbyUpdateSent;
+
         public UInt16 LastSentChatMsgID = 0; //last msg this client said
         public UInt16 LastRecvChatMsgID = 0; //last msg this client knows about
 
@@ -102,13 +104,19 @@ namespace Barotrauma.Networking
         {
             get
             {
-                if (GameMain.Server == null || !GameMain.Server.ServerSettings.KarmaEnabled) { return 100.0f; }
+                if (GameMain.Server == null || !GameMain.Server.ServerSettings.KarmaEnabled || GameMain.GameSession?.GameMode is PvPMode) 
+                { 
+                    return 100.0f; 
+                }
                 if (HasPermission(ClientPermissions.KarmaImmunity)) { return 100.0f; }
                 return karma;
             }
             set
             {
-                if (GameMain.Server == null || !GameMain.Server.ServerSettings.KarmaEnabled) { return; }
+                if (GameMain.Server == null || !GameMain.Server.ServerSettings.KarmaEnabled || GameMain.GameSession?.GameMode is PvPMode) 
+                { 
+                    return;
+                }
                 karma = Math.Min(Math.Max(value, 0.0f), 100.0f);
                 if (!MathUtils.NearlyEqual(karma, syncedKarma, 10.0f))
                 {
@@ -160,8 +168,8 @@ namespace Barotrauma.Networking
             LastSentChatMsgID = 0;
             LastRecvChatMsgID = ChatMessage.LastID;
 
-            LastRecvLobbyUpdate = 0;
-
+            LastRecvLobbyUpdate = NetIdUtils.GetIdOlderThan(GameMain.NetLobbyScreen.LastUpdateID);
+            InitialLobbyUpdateSent = false;
             LastRecvEntityEventID = 0;
 
             UnreceivedEntityEventCount = 0;

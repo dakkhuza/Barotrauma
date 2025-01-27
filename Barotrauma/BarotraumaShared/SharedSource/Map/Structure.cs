@@ -53,6 +53,8 @@ namespace Barotrauma
         const float LeakThreshold = 0.1f;
         const float BigGapThreshold = 0.7f;
 
+        public override ContentPackage ContentPackage => Prefab?.ContentPackage;
+
 #if CLIENT
         public SpriteEffects SpriteEffects = SpriteEffects.None;
 #endif
@@ -499,6 +501,10 @@ namespace Barotrauma
             {
                 CastShadow = Prefab.CastShadow;
             }
+            if (element?.GetAttribute(nameof(Indestructible)) == null)
+            {
+                Indestructible = Prefab.ConfigElement.GetAttributeBool(nameof(Indestructible), false);
+            }
 
             if (Prefab.Body)
             {
@@ -583,7 +589,7 @@ namespace Barotrauma
             };
             foreach (KeyValuePair<Identifier, SerializableProperty> property in SerializableProperties)
             {
-                if (!property.Value.Attributes.OfType<Editable>().Any()) { continue; }
+                if (!property.Value.Attributes.OfType<Serialize>().Any()) { continue; }
                 clone.SerializableProperties[property.Key].TrySetValue(clone, property.Value.GetValue(this));
             }
             if (FlippedX) clone.FlipX(false);

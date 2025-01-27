@@ -3,6 +3,7 @@ using Barotrauma.Extensions;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Xml.Linq;
 
@@ -62,6 +63,8 @@ namespace Barotrauma
         private int nameFormatIndex;
         private Identifier nameIdentifier;
 
+        public int NameFormatIndex => nameFormatIndex;
+
         /// <summary>
         /// For backwards compatibility: a non-localizable name from the old text files.
         /// </summary>
@@ -80,7 +83,7 @@ namespace Barotrauma
         /// <summary>
         /// Is some mission blocking this location from changing its type, or have location type changes been forcibly disabled on the location?
         /// </summary>
-        public bool LocationTypeChangesBlocked => DisallowLocationTypeChanges || availableMissions.Any(m => m.Prefab.BlockLocationTypeChanges);
+        public bool LocationTypeChangesBlocked => DisallowLocationTypeChanges || availableMissions.Any(m => !m.Completed && m.Prefab.BlockLocationTypeChanges);
 
         public bool DisallowLocationTypeChanges;
 
@@ -121,7 +124,16 @@ namespace Barotrauma
             /// </summary>
             public int PriceModifier { get; set; }
             public Location Location { get; }
+
+            /// <summary>
+            /// The maximum effect positive reputation can have on store prices (e.g. 0.5 = 50% discount with max reputation).
+            /// </summary>
             private float MaxReputationModifier => Location.StoreMaxReputationModifier;
+
+            /// <summary>
+            /// The maximum effect negative reputation can have on store prices (e.g. 0.5 = 50% price increase with minimum reputation).
+            /// </summary>
+            private float MinReputationModifier => Location.StoreMinReputationModifier;
 
             private StoreInfo(Location location)
             {
@@ -340,7 +352,7 @@ namespace Barotrauma
                 if (characters.Any())
                 {
                     price *= 1f + characters.Max(static c => c.GetStatValue(StatTypes.StoreSellMultiplier, includeSaved: false));
-                    price *= 1f + characters.Max(c => item.Tags.Sum(tag => c.Info.GetSavedStatValue(StatTypes.StoreSellMultiplier, tag)));
+                    price *= 1f + characters.Max(c => item.Tags.Sum(tag => c.Info.GetSavedStatValueWithAll(StatTypes.StoreSellMultiplier, tag)));
                 }
 
                 // Price should never go below 1 mk
@@ -370,7 +382,7 @@ namespace Barotrauma
                     }
                     else
                     {
-                        return MathHelper.Lerp(1.0f, 1.0f + MaxReputationModifier, reputation.Value / reputation.MinReputation);
+                        return MathHelper.Lerp(1.0f, 1.0f + MinReputationModifier, reputation.Value / reputation.MinReputation);
                     }
                 }
                 else
@@ -381,7 +393,7 @@ namespace Barotrauma
                     }
                     else
                     {
-                        return MathHelper.Lerp(1.0f, 1.0f - MaxReputationModifier, reputation.Value / reputation.MinReputation);
+                        return MathHelper.Lerp(1.0f, 1.0f - MinReputationModifier, reputation.Value / reputation.MinReputation);
                     }
                 }
             }
@@ -395,6 +407,7 @@ namespace Barotrauma
         public Dictionary<Identifier, StoreInfo> Stores { get; set; }
 
         private float StoreMaxReputationModifier => Type.StoreMaxReputationModifier;
+        private float StoreMinReputationModifier => Type.StoreMinReputationModifier;
         private float StoreSellPriceModifier => Type.StoreSellPriceModifier;
         private float DailySpecialPriceModifier => Type.DailySpecialPriceModifier;
         private float RequestGoodPriceModifier => Type.RequestGoodPriceModifier;
@@ -1177,9 +1190,22 @@ namespace Barotrauma
             }
         }
 
-        private static LocalizedString GetName(LocationType type, int nameFormatIndex, Identifier nameId)
+        public static LocalizedString GetName(Identifier locationTypeIdentifier, int nameFormatIndex, Identifier nameId)
         {
-            if (type?.NameFormats == null || !type.NameFormats.Any())
+            if (LocationType.Prefabs.TryGet(locationTypeIdentifier, out LocationType locationType))
+            {
+                return GetName(locationType, nameFormatIndex, nameId);
+            }
+            else
+            {
+                DebugConsole.ThrowError($"Could not find the location type {locationTypeIdentifier}.\n" + Environment.StackTrace.CleanUpPath());
+                return new RawLString(nameId.Value);
+            }
+        }
+
+        public static LocalizedString GetName(LocationType type, int nameFormatIndex, Identifier nameId)
+        {
+            if (type?.NameFormats == null || !type.NameFormats.Any() || nameFormatIndex < 0)
             {
                 return TextManager.Get(nameId);
             }

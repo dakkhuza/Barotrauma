@@ -47,6 +47,7 @@ namespace Barotrauma
                         SelectedCharacter,
                         SelectedItem,
                         SelectedSecondaryItem,
+                        AnimController.TargetMovement,
                         AnimController.Anim);
 
                     memLocalState.Add(posInfo);
@@ -56,7 +57,7 @@ namespace Barotrauma
                     if (IsKeyDown(InputType.Right)) newInput |= InputNetFlags.Right;
                     if (IsKeyDown(InputType.Up)) newInput |= InputNetFlags.Up;
                     if (IsKeyDown(InputType.Down)) newInput |= InputNetFlags.Down;
-                    if (IsKeyDown(InputType.Run)) newInput |= InputNetFlags.Run;
+                    if (IsKeyDown(InputType.Run) || ToggleRun) newInput |= InputNetFlags.Run;
                     if (IsKeyDown(InputType.Crouch)) newInput |= InputNetFlags.Crouch;
                     if (IsKeyHit(InputType.Select)) newInput |= InputNetFlags.Select; //TODO: clean up the way this input is registered
                     if (IsKeyHit(InputType.Deselect)) newInput |= InputNetFlags.Deselect;
@@ -68,7 +69,7 @@ namespace Barotrauma
                     if (IsKeyDown(InputType.Attack)) newInput |= InputNetFlags.Attack;
                     if (IsKeyDown(InputType.Ragdoll)) newInput |= InputNetFlags.Ragdoll;
 
-                    if (AnimController.TargetDir == Direction.Left) newInput |= InputNetFlags.FacingLeft;
+                    if (AnimController.Dir < 0) newInput |= InputNetFlags.FacingLeft;
 
                     Vector2 relativeCursorPos = cursorPosition - AimRefPosition;
                     relativeCursorPos.Normalize();
@@ -154,6 +155,9 @@ namespace Barotrauma
                 case TreatmentEventData _:
                     msg.WriteBoolean(AnimController.Anim == AnimController.Animation.CPR);
                     break;
+                case ConfirmRefundEventData _:
+                    //do nothing
+                    break;
                 case CharacterStatusEventData _:
                     //do nothing
                     break;
@@ -202,11 +206,15 @@ namespace Barotrauma
                 keys[(int)InputType.Use].Held = useInput;
                 keys[(int)InputType.Use].SetState(false, useInput);
 
-                bool crouching = msg.ReadBoolean();
                 if (AnimController is HumanoidAnimController)
                 {
+                    bool crouching = msg.ReadBoolean();
                     keys[(int)InputType.Crouch].Held = crouching;
                     keys[(int)InputType.Crouch].SetState(false, crouching);
+                }
+                else if (AnimController is FishAnimController fishAnim)
+                {
+                    fishAnim.Reverse = msg.ReadBoolean();
                 }
 
                 bool attackInput = msg.ReadBoolean();
@@ -255,6 +263,11 @@ namespace Barotrauma
                 msg.ReadRangedSingle(-MaxVel, MaxVel, 12));
             linearVelocity = NetConfig.Quantize(linearVelocity, -MaxVel, MaxVel, 12);
 
+            Vector2 targetMovement = new Vector2(
+                msg.ReadRangedSingle(-Ragdoll.MAX_SPEED, Ragdoll.MAX_SPEED, 12),
+                msg.ReadRangedSingle(-Ragdoll.MAX_SPEED, Ragdoll.MAX_SPEED, 12));
+            targetMovement = NetConfig.Quantize(targetMovement, -Ragdoll.MAX_SPEED, Ragdoll.MAX_SPEED, 12);
+
             bool fixedRotation = msg.ReadBoolean();
             float? rotation = null;
             float? angularVelocity = null;
@@ -265,6 +278,8 @@ namespace Barotrauma
                 angularVelocity = msg.ReadRangedSingle(-MaxAngularVel, MaxAngularVel, 8);
                 angularVelocity = NetConfig.Quantize(angularVelocity.Value, -MaxAngularVel, MaxAngularVel, 8);
             }
+
+            bool ignorePlatforms = msg.ReadBoolean();
 
             bool readStatus = msg.ReadBoolean();
             if (readStatus)
@@ -287,7 +302,7 @@ namespace Barotrauma
                     {
                         byte happiness = msg.ReadByte();
                         byte hunger = msg.ReadByte();
-                        if ((AIController as EnemyAIController)?.PetBehavior is PetBehavior petBehavior)
+                        if (AIController is EnemyAIController { PetBehavior: PetBehavior petBehavior })
                         {
                             petBehavior.Happiness = (float)happiness / byte.MaxValue * petBehavior.MaxHappiness;
                             petBehavior.Hunger = (float)hunger / byte.MaxValue * petBehavior.MaxHunger;
@@ -309,7 +324,7 @@ namespace Barotrauma
                     pos, rotation,
                     networkUpdateID,
                     facingRight ? Direction.Right : Direction.Left,
-                    selectedCharacter, selectedItem, selectedSecondaryItem, animation);
+                    selectedCharacter, selectedItem, selectedSecondaryItem, targetMovement, animation, ignorePlatforms);
 
                 while (index < memState.Count && NetIdUtils.IdMoreRecent(posInfo.ID, memState[index].ID))
                     index++;
@@ -321,7 +336,7 @@ namespace Barotrauma
                     pos, rotation,
                     linearVelocity, angularVelocity,
                     sendingTime, facingRight ? Direction.Right : Direction.Left,
-                    selectedCharacter, selectedItem, selectedSecondaryItem, animation);
+                    selectedCharacter, selectedItem, selectedSecondaryItem, targetMovement, animation, ignorePlatforms);
 
                 while (index < memState.Count && posInfo.Timestamp > memState[index].Timestamp)
                     index++;
@@ -395,13 +410,13 @@ namespace Barotrauma
                     ReadStatus(msg);
                     break;
                 case EventType.UpdateSkills:
-                    int skillCount = msg.ReadByte();
-                    for (int i = 0; i < skillCount; i++)
+                    Identifier skillIdentifier = msg.ReadIdentifier();
+                    if (!skillIdentifier.IsEmpty)
                     {
-                        Identifier skillIdentifier = msg.ReadIdentifier();
+                        bool forceNotification = msg.ReadBoolean();
                         float skillLevel = msg.ReadSingle();
-                        info?.SetSkillLevel(skillIdentifier, skillLevel);
-                    }
+                        info?.SetSkillLevel(skillIdentifier, skillLevel, forceNotification: forceNotification);
+                    }                  
                     break;
                 case EventType.SetAttackTarget:
                 case EventType.ExecuteAttack:
@@ -512,7 +527,12 @@ namespace Barotrauma
                     break;
                 case EventType.UpdateExperience:
                     int experienceAmount = msg.ReadInt32();
-                    info?.SetExperience(experienceAmount);
+                    int additionalTalentPoints = msg.ReadInt32();
+                    if (info != null)
+                    {
+                        info.SetExperience(experienceAmount);
+                        info.AdditionalTalentPoints = additionalTalentPoints;
+                    }
                     break;
                 case EventType.UpdateTalents:
                     ushort talentCount = msg.ReadUInt16();
@@ -526,6 +546,20 @@ namespace Barotrauma
                 case EventType.UpdateMoney:
                     int moneyAmount = msg.ReadInt32();
                     SetMoney(moneyAmount);
+                    break;
+                case EventType.UpdateTalentRefundPoints:
+                    int refundPoints = msg.ReadInt32();
+                    if (info != null)
+                    {
+                        if (refundPoints > info.TalentRefundPoints)
+                        {
+                            info.ShowTalentResetPopupOnOpen = true;
+                        }
+                        info.TalentRefundPoints = refundPoints;
+                    }
+                    break;
+                case EventType.ConfirmTalentRefund:
+                    Info?.RefundTalents();
                     break;
                 case EventType.UpdatePermanentStats:
                     byte savedStatValueCount = msg.ReadByte();

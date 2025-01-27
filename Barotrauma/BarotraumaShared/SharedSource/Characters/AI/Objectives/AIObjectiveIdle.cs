@@ -88,7 +88,7 @@ namespace Barotrauma
             CalculatePriority();
         }
 
-        protected override bool CheckObjectiveSpecific() => false;
+        protected override bool CheckObjectiveState() => false;
         public override bool CanBeCompleted => true;
 
         public readonly HashSet<Identifier> PreferredOutpostModuleTypes = new HashSet<Identifier>();
@@ -158,8 +158,17 @@ namespace Barotrauma
             {
                 character.DeselectCharacter();
             }
-
-            character.SelectedItem = null;
+            if (character.SelectedItem != null)
+            {
+                if (character.SelectedItem.Prefab.AllowDeselectWhenIdling)
+                {
+                    character.SelectedItem = null;
+                }
+                else
+                {
+                    return;
+                }
+            }
 
             if (!character.IsClimbing)
             {
@@ -378,14 +387,14 @@ namespace Barotrauma
                     chairCheckTimer -= deltaTime;
                     if (chairCheckTimer <= 0.0f && character.SelectedSecondaryItem == null)
                     {
-                        foreach (Item item in Item.ItemList)
+                        foreach (Item chair in Item.ChairItems)
                         {
-                            if (item.CurrentHull != currentHull || !item.HasTag(Tags.ChairItem)) { continue; }
+                            if (chair.CurrentHull != currentHull) { continue; }
                             //not possible in vanilla game, but a mod might have holdable/attachable chairs
-                            if (item.ParentInventory != null || item.body is { Enabled: true }) { continue; } 
-                            var controller = item.GetComponent<Controller>();
+                            if (chair.ParentInventory != null || chair.body is { Enabled: true }) { continue; } 
+                            var controller = chair.GetComponent<Controller>();
                             if (controller == null || controller.User != null) { continue; }
-                            item.TryInteract(character, forceSelectKey: true);
+                            chair.TryInteract(character, forceSelectKey: true);
                         }
                         chairCheckTimer = chairCheckInterval;
                     }
@@ -489,27 +498,26 @@ namespace Barotrauma
             if (checkItemsTimer <= 0)
             {
                 checkItemsTimer = checkItemsInterval * Rand.Range(0.9f, 1.1f);
-                var hull = character.CurrentHull;
-                if (hull != null)
+                if (character.Submarine is not Submarine sub) { return; }
+                if (sub.TeamID != character.TeamID) { return; }
+                if (character.CurrentHull is not Hull currentHull) { return; }
+                itemsToClean.Clear();
+                foreach (Item item in Item.CleanableItems)
                 {
-                    itemsToClean.Clear();
-                    foreach (Item item in Item.CleanableItems)
+                    if (item.CurrentHull != currentHull) { continue; }
+                    if (AIObjectiveCleanupItems.IsValidTarget(item, character, checkInventory: true, allowUnloading: false) && !ignoredItems.Contains(item))
                     {
-                        if (item.CurrentHull != hull) { continue; }
-                        if (AIObjectiveCleanupItems.IsValidTarget(item, character, checkInventory: true, allowUnloading: false) && !ignoredItems.Contains(item))
-                        {
-                            itemsToClean.Add(item);
-                        }
+                        itemsToClean.Add(item);
                     }
-                    if (itemsToClean.Any())
+                }
+                if (itemsToClean.Any())
+                {
+                    var targetItem = itemsToClean.MinBy(i => Math.Abs(character.WorldPosition.X - i.WorldPosition.X));
+                    if (targetItem != null)
                     {
-                        var targetItem = itemsToClean.OrderBy(i => Math.Abs(character.WorldPosition.X - i.WorldPosition.X)).FirstOrDefault();
-                        if (targetItem != null)
-                        {
-                            var cleanupObjective = new AIObjectiveCleanupItem(targetItem, character, objectiveManager, PriorityModifier);
-                            cleanupObjective.Abandoned += () => ignoredItems.Add(targetItem);
-                            subObjectives.Add(cleanupObjective);
-                        }
+                        var cleanupObjective = new AIObjectiveCleanupItem(targetItem, character, objectiveManager, PriorityModifier);
+                        cleanupObjective.Abandoned += () => ignoredItems.Add(targetItem);
+                        subObjectives.Add(cleanupObjective);
                     }
                 }
             }
@@ -534,6 +542,8 @@ namespace Barotrauma
             itemsToClean.Clear();
             ignoredItems.Clear();
             autonomousObjectiveRetryTimer = 10;
+            timerMargin = 0;
+            newTargetTimer = 0;
         }
 
         public override void OnDeselected()
