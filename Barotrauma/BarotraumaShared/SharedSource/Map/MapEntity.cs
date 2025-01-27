@@ -12,17 +12,12 @@ namespace Barotrauma
 {
     abstract partial class MapEntity : Entity, ISpatialEntity
     {
-        public static List<MapEntity> mapEntityList = new List<MapEntity>();
+        public readonly static List<MapEntity> MapEntityList = new List<MapEntity>();
 
         public readonly MapEntityPrefab Prefab;
 
         protected List<ushort> linkedToID;
         public List<ushort> unresolvedLinkedToID;
-
-        public static int MapEntityUpdateInterval = 1;
-        public static int GapUpdateInterval = 4;
-        public static int PoweredUpdateInterval = 1;
-        private static int mapEntityUpdateTick;
 
         /// <summary>
         /// List of upgrades this item has
@@ -61,7 +56,24 @@ namespace Barotrauma
         //the position and dimensions of the entity
         protected Rectangle rect;
 
-        public bool ExternalHighlight = false;
+        protected static readonly HashSet<MapEntity> highlightedEntities = new HashSet<MapEntity>();
+
+        public static IEnumerable<MapEntity> HighlightedEntities => highlightedEntities;
+
+
+        private bool externalHighlight = false;
+        public bool ExternalHighlight
+        {
+            get { return externalHighlight; }
+            set
+            {
+                if (value != externalHighlight)
+                {
+                    externalHighlight = value;
+                    CheckIsHighlighted();
+                }
+            }
+        }
 
         //is the mouse inside the rect
         private bool isHighlighted;
@@ -69,7 +81,14 @@ namespace Barotrauma
         public bool IsHighlighted
         {
             get { return isHighlighted || ExternalHighlight; }
-            set { isHighlighted = value; }
+            set 
+            {
+                if (value != isHighlighted)
+                {
+                    isHighlighted = value; 
+                    CheckIsHighlighted();
+                }
+            }
         }
 
         public virtual Rectangle Rect
@@ -160,7 +179,7 @@ namespace Barotrauma
             {
                 if (!float.IsNaN(value))
                 {
-                    _spriteOverrideDepth = MathHelper.Clamp(value, 0.001f, 0.999f);
+                    _spriteOverrideDepth = MathHelper.Clamp(value, 0.001f, 0.999999f);
                     if (this is Item) { _spriteOverrideDepth = Math.Min(_spriteOverrideDepth, 0.9f); }
                     SpriteDepthOverrideIsSet = true;
                 }
@@ -176,6 +195,16 @@ namespace Barotrauma
             get;
             set;
         }
+
+        /// <summary>
+        /// Is the layer this entity is in currently hidden? If it is, the entity is not updated and should do nothing.
+        /// </summary>
+        public bool IsLayerHidden { get; set; }
+
+        /// <summary>
+        /// Is the entity hidden due to <see cref="HiddenInGame"/> being enabled or the layer the entity is in being hidden?
+        /// </summary>
+        public bool IsHidden => HiddenInGame || IsLayerHidden;
 
         public override Vector2 Position
         {
@@ -293,7 +322,7 @@ namespace Barotrauma
             }
         }
 
-        public virtual void Move(Vector2 amount, bool ignoreContacts = false)
+        public virtual void Move(Vector2 amount, bool ignoreContacts = true)
         {
             rect.X += (int)amount.X;
             rect.Y += (int)amount.Y;
@@ -364,6 +393,31 @@ namespace Barotrauma
             return true;
         }
 
+        protected virtual void CheckIsHighlighted()
+        {
+            if (IsHighlighted || ExternalHighlight)
+            {
+                highlightedEntities.Add(this);
+            }
+            else
+            {
+                highlightedEntities.Remove(this);
+            }
+        }
+
+        private static readonly List<MapEntity> tempHighlightedEntities = new List<MapEntity>();
+        public static void ClearHighlightedEntities()
+        {
+            highlightedEntities.RemoveWhere(e => e.Removed);
+            tempHighlightedEntities.Clear();
+            tempHighlightedEntities.AddRange(highlightedEntities);
+            foreach (var entity in tempHighlightedEntities)
+            {
+                entity.IsHighlighted = false;
+            }
+        }
+
+
         public abstract MapEntity Clone();
 
         public static List<MapEntity> Clone(List<MapEntity> entitiesToClone)
@@ -405,7 +459,7 @@ namespace Barotrauma
             List<Wire> orphanedWires = new List<Wire>();
             for (int i = 0; i < clones.Count; i++)
             {
-                if (!(clones[i] is Item cloneItem)) { continue; }
+                if (clones[i] is not Item cloneItem) { continue; }
 
                 var door = cloneItem.GetComponent<Door>();
                 door?.RefreshLinkedGap();
@@ -460,10 +514,12 @@ namespace Barotrauma
                     }
 
                     (clones[itemIndex] as Item).Connections[connectionIndex].TryAddLink(cloneWire);
-                    cloneWire.Connect((clones[itemIndex] as Item).Connections[connectionIndex], false);
+                    cloneWire.Connect((clones[itemIndex] as Item).Connections[connectionIndex], n, addNode: false);
                 }
 
-                if ((cloneWire.Connections[0] == null || cloneWire.Connections[1] == null) && cloneItem.GetComponent<DockingPort>() == null)
+                if (originalWire.Connections.Any(c => c != null) &&
+                    (cloneWire.Connections[0] == null || cloneWire.Connections[1] == null) && 
+                    cloneItem.GetComponent<DockingPort>() == null)
                 {
                     if (!clones.Any(c => (c as Item)?.GetComponent<ConnectionPanel>()?.DisconnectedWires.Contains(cloneWire) ?? false))
                     {
@@ -485,32 +541,32 @@ namespace Barotrauma
         {
             if (Sprite == null)
             {
-                mapEntityList.Add(this);
+                MapEntityList.Add(this);
                 return;
             }
 
             int i = 0;
-            while (i < mapEntityList.Count)
+            while (i < MapEntityList.Count)
             {
                 i++;
-                if (mapEntityList[i - 1]?.Prefab == Prefab)
+                if (MapEntityList[i - 1]?.Prefab == Prefab)
                 {
-                    mapEntityList.Insert(i, this);
+                    MapEntityList.Insert(i, this);
                     return;
                 }
             }
 
 #if CLIENT
             i = 0;
-            while (i < mapEntityList.Count)
+            while (i < MapEntityList.Count)
             {
                 i++;
-                Sprite existingSprite = mapEntityList[i - 1].Sprite;
+                Sprite existingSprite = MapEntityList[i - 1].Sprite;
                 if (existingSprite == null) { continue; }
                 if (existingSprite.Texture == this.Sprite.Texture) { break; }
             }
 #endif
-            mapEntityList.Insert(i, this);
+            MapEntityList.Insert(i, this);
         }
 
         /// <summary>
@@ -520,7 +576,7 @@ namespace Barotrauma
         {
             base.Remove();
 
-            mapEntityList.Remove(this);
+            MapEntityList.Remove(this);
 
             if (aiTarget != null) aiTarget.Remove();
         }
@@ -529,16 +585,11 @@ namespace Barotrauma
         {
             base.Remove();
 
-            mapEntityList.Remove(this);
-
+            MapEntityList.Remove(this);
 #if CLIENT
             Submarine.ForceRemoveFromVisibleEntities(this);
-            if (SelectedList.Contains(this))
-            {
-                SelectedList = SelectedList.Where(e => e != this).ToHashSet();
-            }
+            SelectedList.Remove(this);
 #endif
-
             if (aiTarget != null)
             {
                 aiTarget.Remove();
@@ -560,44 +611,30 @@ namespace Barotrauma
         /// </summary>
         public static void UpdateAll(float deltaTime, Camera cam)
         {
-            mapEntityUpdateTick++;
-
 #if CLIENT
             var sw = new System.Diagnostics.Stopwatch();
             sw.Start();
 #endif
-            if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
+            foreach (Hull hull in Hull.HullList)
             {
-
-                foreach (Hull hull in Hull.HullList)
-                {
-                    hull.Update(deltaTime * MapEntityUpdateInterval, cam);
-                }
+                hull.Update(deltaTime, cam);
+            }
 #if CLIENT
-                Hull.UpdateCheats(deltaTime * MapEntityUpdateInterval, cam);
+            Hull.UpdateCheats(deltaTime, cam);
 #endif
 
-                foreach (Structure structure in Structure.WallList)
-                {
-                    structure.Update(deltaTime * MapEntityUpdateInterval, cam);
-                }
+            foreach (Structure structure in Structure.WallList)
+            {
+                structure.Update(deltaTime, cam);
             }
 
             //update gaps in random order, because otherwise in rooms with multiple gaps
             //the water/air will always tend to flow through the first gap in the list,
             //which may lead to weird behavior like water draining down only through
             //one gap in a room even if there are several
-            if (mapEntityUpdateTick % GapUpdateInterval == 0)
+            foreach (Gap gap in Gap.GapList.OrderBy(g => Rand.Int(int.MaxValue)))
             {
-                foreach (Gap gap in Gap.GapList.OrderBy(g => Rand.Int(int.MaxValue)))
-                {
-                    gap.Update(deltaTime * GapUpdateInterval, cam);
-                }
-            }
-
-            if (mapEntityUpdateTick % PoweredUpdateInterval == 0)
-            {
-                Powered.UpdatePower(deltaTime * PoweredUpdateInterval);
+                gap.Update(deltaTime, cam);
             }
 
 #if CLIENT
@@ -605,35 +642,34 @@ namespace Barotrauma
             GameMain.PerformanceCounter.AddElapsedTicks("Update:MapEntity:Misc", sw.ElapsedTicks);
             sw.Restart();
 #endif
-
-            if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
+            Powered.UpdatePower(deltaTime);
+            Item.UpdatePendingConditionUpdates(deltaTime);
+            Item lastUpdatedItem = null;
+            try
             {
                 foreach (Item item in Item.ItemList)
                 {
-                    if (GameMain.LuaCs.Game.updatePriorityItems.Contains(item)) continue;
-                    item.Update(deltaTime * MapEntityUpdateInterval, cam);
+                    lastUpdatedItem = item;
+                    item.Update(deltaTime, cam);
                 }
             }
-
-            foreach (var item in GameMain.LuaCs.Game.updatePriorityItems)
+            catch (InvalidOperationException e)
             {
-                if (item.Removed) continue;
-
-                item.Update(deltaTime, cam);
+                GameAnalyticsManager.AddErrorEventOnce(
+                    "MapEntity.UpdateAll:ItemUpdateInvalidOperation", 
+                    GameAnalyticsManager.ErrorSeverity.Critical, 
+                    $"Error while updating item {lastUpdatedItem?.Name ?? "null"}: {e.Message}");
+                throw new InvalidOperationException($"Error while updating item {lastUpdatedItem?.Name ?? "null"}", innerException: e);
             }
+
+            UpdateAllProjSpecific(deltaTime);
 
 #if CLIENT
             sw.Stop();
             GameMain.PerformanceCounter.AddElapsedTicks("Update:MapEntity:Items", sw.ElapsedTicks);
             sw.Restart();
 #endif
-
-            if (mapEntityUpdateTick % MapEntityUpdateInterval == 0)
-            {
-                UpdateAllProjSpecific(deltaTime * MapEntityUpdateInterval);
-
-                Spawner?.Update();
-            }
+            Spawner?.Update();
         }
 
         static partial void UpdateAllProjSpecific(float deltaTime);
@@ -668,13 +704,33 @@ namespace Barotrauma
             Move(-relative * 2.0f);
         }
 
+        public virtual Quad2D GetTransformedQuad()
+            => Quad2D.FromSubmarineRectangle(rect);
+
         public static List<MapEntity> LoadAll(Submarine submarine, XElement parentElement, string filePath, int idOffset)
         {
             IdRemap idRemap = new IdRemap(parentElement, idOffset);
 
+            bool containsHiddenContainers = false;
+            bool hiddenContainerCreated = false;
+            MTRandom hiddenContainerRNG = new MTRandom(ToolBox.StringToInt(submarine.Info.Name));
+            foreach (var element in parentElement.Elements())
+            {
+                if (element.NameAsIdentifier() != "Item") { continue; }
+                var tags = element.GetAttributeIdentifierArray("tags", Array.Empty<Identifier>());
+                if (tags.Contains(Tags.HiddenItemContainer))
+                {
+                    containsHiddenContainers = true; 
+                    break;
+                }
+            }
+
             List<MapEntity> entities = new List<MapEntity>();
             foreach (var element in parentElement.Elements())
             {
+#if CLIENT
+                GameMain.GameSession?.Campaign?.ThrowIfStartRoundCancellationRequested();
+#endif
                 string typeName = element.Name.ToString();
 
                 Type t;
@@ -693,10 +749,11 @@ namespace Barotrauma
                     continue;
                 }
 
+                Identifier identifier = element.GetAttributeIdentifier("identifier", "");
+                Identifier replacementIdentifier = Identifier.Empty;
                 if (t == typeof(Structure))
                 {
                     string name = element.Attribute("name").Value;
-                    Identifier identifier = element.GetAttributeIdentifier("identifier", "");
                     StructurePrefab structurePrefab = Structure.FindPrefab(name, identifier);
                     if (structurePrefab == null)
                     {
@@ -705,6 +762,20 @@ namespace Barotrauma
                         {
                             t = typeof(Item);
                         }
+                    }
+                }
+                else if (t == typeof(Item) && !containsHiddenContainers && identifier == "vent" && 
+                    submarine.Info.Type == SubmarineType.Player && !submarine.Info.HasTag(SubmarineTag.Shuttle))
+                {
+                    if (!hiddenContainerCreated)
+                    {
+                        DebugConsole.AddWarning($"There are no hidden containers such as loose vents or loose panels in the submarine \"{submarine.Info.Name}\". Certain traitor events require these to function properly. Converting one of the vents to a loose vent...");
+                    }
+                    if (!hiddenContainerCreated || hiddenContainerRNG.NextDouble() < 0.2)
+                    {
+                        replacementIdentifier = "loosevent".ToIdentifier();
+                        containsHiddenContainers = true;
+                        hiddenContainerCreated = true;
                     }
                 }
 
@@ -721,7 +792,12 @@ namespace Barotrauma
                     }
                     else
                     {
-                        object newEntity = loadMethod.Invoke(t, new object[] { element.FromPackage(null), submarine, idRemap });
+                        var newElement = element.FromPackage(null);
+                        if (!replacementIdentifier.IsEmpty)
+                        {
+                            newElement.SetAttributeValue("identifier", replacementIdentifier.ToString());
+                        }
+                        object newEntity = loadMethod.Invoke(t, new object[] { newElement, submarine, idRemap });
                         if (newEntity != null)
                         {
                             entities.Add((MapEntity)newEntity);
@@ -754,9 +830,9 @@ namespace Barotrauma
             for (int i = 0; i < entities.Count; i++)
             {
                 if (entities[i].mapLoadedCalled || entities[i].Removed) { continue; }
-                if (entities[i] is LinkedSubmarine)
+                if (entities[i] is LinkedSubmarine sub)
                 {
-                    linkedSubs.Add((LinkedSubmarine)entities[i]);
+                    linkedSubs.Add(sub);
                     continue;
                 }
 
@@ -774,6 +850,35 @@ namespace Barotrauma
             foreach (LinkedSubmarine linkedSub in linkedSubs)
             {
                 linkedSub.OnMapLoaded();
+            }
+
+            CreateDroppedStacks(entities);
+        }
+
+        private static void CreateDroppedStacks(List<MapEntity> entities)
+        {
+            const float MaxDist = 10.0f;
+            List<Item> itemsInStack = new List<Item>();
+            for (int i = 0; i < entities.Count; i++)
+            {
+                if (entities[i] is not Item item1 || item1.Prefab.MaxStackSize <= 1 || item1.body is not { Enabled: true }) { continue; }
+                itemsInStack.Clear();
+                itemsInStack.Add(item1);
+                for (int j = i + 1; j < entities.Count; j++)
+                {
+                    if (entities[j] is not Item item2) { continue; }
+                    if (item1.Prefab != item2.Prefab) { continue; }
+                    if (item2.body is not { Enabled: true }) { continue; }
+                    if (item2.DroppedStack.Any()) { continue; }
+                    if (Math.Abs(item1.Position.X - item2.Position.X) > MaxDist) { continue; }
+                    if (Math.Abs(item1.Position.Y - item2.Position.Y) > MaxDist) { continue; }
+                    itemsInStack.Add(item2);
+                }
+                if (itemsInStack.Count > 1)
+                {
+                    item1.CreateDroppedStack(itemsInStack, allowClientExecute: true);
+                    DebugConsole.Log($"Merged x{itemsInStack.Count} of {item1.Name} into a dropped stack.");
+                }
             }
         }
 

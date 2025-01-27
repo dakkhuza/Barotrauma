@@ -10,8 +10,6 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Xml.Linq;
-using MoonSharp.Interpreter;
-using System.Net;
 using Barotrauma.Extensions;
 
 namespace Barotrauma
@@ -33,8 +31,6 @@ namespace Barotrauma
             }
             set { world = value; }
         }
-
-        public static LuaCsSetup LuaCs;
 
         public static GameServer Server;
         public static NetworkMember NetworkMember
@@ -88,8 +84,21 @@ namespace Barotrauma
             Console.WriteLine("Loading game settings");
             GameSettings.Init();
 
-            Console.WriteLine("Initializing SteamManager");
-            SteamManager.Initialize();
+            //no owner key = dedicated server
+            if (!CommandLineArgs.Any(a => a.Trim().Equals("-ownerkey", StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine("Initializing SteamManager");
+                SteamManager.Initialize();
+
+                if (!SteamManager.SteamworksLibExists)
+                {
+                    Console.WriteLine("Initializing EosManager");
+                    if (EosInterface.Core.Init(EosInterface.ApplicationCredentials.Server, enableOverlay: false).TryUnwrapFailure(out var initError))
+                    {
+                        Console.WriteLine($"EOS failed to initialize: {initError}");
+                    }
+                }
+            }
 
             //TODO: figure out how consent is supposed to work for servers
             //Console.WriteLine("Initializing GameAnalytics");
@@ -117,33 +126,18 @@ namespace Barotrauma
             NetLobbyScreen = new NetLobbyScreen();
 
             CheckContentPackage();
-
-            LuaCs = new LuaCsSetup();
         }
 
 
         private void CheckContentPackage()
         {
-            //TODO: reimplement using only core package?
-            /*foreach (ContentPackage contentPackage in Config.AllEnabledPackages)
+            if (Version < VanillaContent.GameVersion)
             {
-                var exePaths = contentPackage.GetFilesOfType(ContentType.ServerExecutable);
-                if (exePaths.Count() > 0 && AppDomain.CurrentDomain.FriendlyName != exePaths.First())
-                {
-                    DebugConsole.NewMessage(AppDomain.CurrentDomain.FriendlyName);
-                    DebugConsole.ShowQuestionPrompt(TextManager.GetWithVariables("IncorrectExe", new string[2] { "[selectedpackage]", "[exename]" }, new string[2] { contentPackage.Name, exePaths.First() }),
-                        (option) =>
-                        {
-                            if (option.ToLower() == "y" || option.ToLower() == "yes")
-                            {
-                                string fullPath = Path.GetFullPath(exePaths.First());
-                                ToolBox.OpenFileWithShell(fullPath);
-                                ShouldRun = false;
-                            }
-                        });
-                    break;
-                }
-            }*/
+                DebugConsole.ThrowErrorLocalized(
+                    TextManager.GetWithVariables("versionmismatchwarning",
+                        ("[gameversion]", Version.ToString()),
+                        ("[contentversion]", VanillaContent.GameVersion.ToString())));
+            }
         }
 
         public void StartServer()
@@ -156,9 +150,8 @@ namespace Barotrauma
             bool enableUpnp = false;
 
             int maxPlayers = 10; 
-            Option<int> ownerKey = Option<int>.None();
-            Option<SteamId> steamId = Option<SteamId>.None();
-            IPAddress listenIp = IPAddress.Any;
+            Option<int> ownerKey = Option.None;
+            Option<P2PEndpoint> ownerEndpoint = Option.None;
 
             XDocument doc = XMLExtensions.TryLoadXml(ServerSettings.SettingsFile);
             if (doc?.Root == null)
@@ -191,12 +184,6 @@ namespace Barotrauma
                     case "-name":
                         name = CommandLineArgs[i + 1];
                         i++;
-                        break;
-                    case "-ip":
-                        if (IPAddress.TryParse(CommandLineArgs[i + 1], out IPAddress address))
-                            listenIp = address;
-                        else
-                            DebugConsole.ThrowError($"Invalid Ip Address '{CommandLineArgs[i + 1]}'.");
                         break;
                     case "-port":
                         int.TryParse(CommandLineArgs[i + 1], out port);
@@ -233,8 +220,8 @@ namespace Barotrauma
                         }
                         i++;
                         break;
-                    case "-steamid":
-                        steamId = SteamId.Parse(CommandLineArgs[i + 1]);
+                    case "-endpoint":
+                        ownerEndpoint = P2PEndpoint.Parse(CommandLineArgs[i + 1]);
                         i++;
                         break;
                     case "-pipes":
@@ -246,7 +233,6 @@ namespace Barotrauma
 
             Server = new GameServer(
                 name,
-                listenIp,
                 port,
                 queryPort,
                 publiclyVisible,
@@ -254,7 +240,7 @@ namespace Barotrauma
                 enableUpnp,
                 maxPlayers,
                 ownerKey,
-                steamId);
+                ownerEndpoint);
             Server.StartServer();
 
             for (int i = 0; i < CommandLineArgs.Length; i++)
@@ -340,9 +326,8 @@ namespace Barotrauma
                 prevTicks = currTicks;
                 while (Timing.Accumulator >= Timing.Step)
                 {
-                    performanceCounterTimer.Start();
-
                     Timing.TotalTime += Timing.Step;
+                    Timing.TotalTimeUnpaused += Timing.Step;                    
                     DebugConsole.Update();
                     if (GameSession?.GameMode == null || !GameSession.GameMode.Paused)
                     {
@@ -351,17 +336,9 @@ namespace Barotrauma
                     Server.Update((float)Timing.Step);
                     if (Server == null) { break; }
                     SteamManager.Update((float)Timing.Step);
+                    EosInterface.Core.Update();
                     TaskPool.Update();
                     CoroutineManager.Update(paused: false, (float)Timing.Step);
-
-                    GameMain.LuaCs.Update();
-                    GameMain.LuaCs.Hook.Call("think", new object[] { });
-                    performanceCounterTimer.Stop();
-                    if (GameMain.LuaCs.PerformanceCounter.EnablePerformanceCounter)
-                    {
-                        GameMain.LuaCs.PerformanceCounter.UpdateElapsedTime = (double)performanceCounterTimer.ElapsedTicks / Stopwatch.Frequency;
-                    }
-                    performanceCounterTimer.Reset();
 
                     Timing.Accumulator -= Timing.Step;
                     updateCount++;
@@ -443,7 +420,6 @@ namespace Barotrauma
         public void Exit()
         {
             ShouldRun = false;
-            GameMain.LuaCs.Stop();
         }
     }
 }

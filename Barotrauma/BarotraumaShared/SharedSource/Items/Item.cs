@@ -12,7 +12,6 @@ using System.Linq;
 using System.Xml.Linq;
 using Barotrauma.Extensions;
 using Barotrauma.MapCreatures.Behavior;
-using MoonSharp.Interpreter;
 using System.Collections.Immutable;
 using Barotrauma.Abilities;
 
@@ -24,7 +23,7 @@ namespace Barotrauma
 {
     partial class Item : MapEntity, IDamageable, IIgnorable, ISerializableEntity, IServerPositionSync, IClientSerializable
     {
-        public static List<Item> ItemList = new List<Item>();
+        public static readonly List<Item> ItemList = new List<Item>();
 
         private static readonly HashSet<Item> dangerousItems = new HashSet<Item>();
 
@@ -43,6 +42,20 @@ namespace Barotrauma
         /// Items that may potentially need to be cleaned up (pickable, not attached to a wall, and not inside a valid container)
         /// </summary>
         public static IReadOnlyCollection<Item> CleanableItems => cleanableItems;
+
+        private static readonly HashSet<Item> deconstructItems = new HashSet<Item>();
+
+        /// <summary>
+        /// Items that have been marked for deconstruction
+        /// </summary>
+        public static HashSet<Item> DeconstructItems => deconstructItems;
+
+        private static readonly List<Item> sonarVisibleItems = new List<Item>();
+
+        /// <summary>
+        /// Items whose <see cref="ItemPrefab.SonarSize"/> is larger than 0
+        /// </summary>
+        public static IReadOnlyCollection<Item> SonarVisibleItems => sonarVisibleItems;
 
         public new ItemPrefab Prefab => base.Prefab as ItemPrefab;
 
@@ -71,17 +84,17 @@ namespace Barotrauma
         public CampaignMode.InteractionType CampaignInteractionType
         {
             get { return campaignInteractionType; }
-            set
-            {
-                if (campaignInteractionType != value)
-                {
-                    campaignInteractionType = value;
-                    AssignCampaignInteractionTypeProjSpecific(campaignInteractionType);
-                }
-            }
         }
 
-        partial void AssignCampaignInteractionTypeProjSpecific(CampaignMode.InteractionType interactionType);
+        public void AssignCampaignInteractionType(CampaignMode.InteractionType interactionType, IEnumerable<Client> targetClients = null)
+        {
+            if (campaignInteractionType == interactionType) { return; }                
+            campaignInteractionType = interactionType;
+            AssignCampaignInteractionTypeProjSpecific(campaignInteractionType, targetClients);                
+        }
+
+
+        partial void AssignCampaignInteractionTypeProjSpecific(CampaignMode.InteractionType interactionType, IEnumerable<Client> targetClients);
 
         public bool Visible = true;
 
@@ -99,8 +112,40 @@ namespace Barotrauma
         private readonly List<IDrawableComponent> drawableComponents;
         private bool hasComponentsToDraw;
 
+        /// <summary>
+        /// Has everything in the item been loaded/instantiated/initialized (basically, can be used to check if the whole constructor/Load method has run).
+        /// Most commonly used to avoid creating network events when some value changes if the item is being initialized.
+        /// </summary>
+        public bool FullyInitialized { get; private set; }
+
         public PhysicsBody body;
-        private float waterDragCoefficient;
+        private readonly float originalWaterDragCoefficient;
+        private float? overrideWaterDragCoefficient;
+        public float WaterDragCoefficient
+        {
+            get => overrideWaterDragCoefficient ?? originalWaterDragCoefficient;
+            set => overrideWaterDragCoefficient = value;
+        }
+
+        /// <summary>
+        /// Can be used by StatusEffects to set the type of the body (if the item has one)
+        /// </summary>
+        public BodyType BodyType
+        {
+            get { return body?.BodyType ?? BodyType.Dynamic; }
+            set 
+            {
+                if (body != null)
+                {
+                    body.BodyType = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Removes the override value -> falls back to using the original value defined in the xml.
+        /// </summary>
+        public void ResetWaterDragCoefficient() => overrideWaterDragCoefficient = null;
 
         public readonly XElement StaticBodyConfig;
 
@@ -108,14 +153,17 @@ namespace Barotrauma
 
         private bool transformDirty = true;
 
+        private static readonly List<Item> itemsWithPendingConditionUpdates = new List<Item>();
+
         private float lastSentCondition;
         private float sendConditionUpdateTimer;
-        private bool conditionUpdatePending;
 
+        private float prevCondition;
         private float condition;
 
         private bool inWater;
-        private readonly bool hasWaterStatusEffects;
+        private readonly bool hasInWaterStatusEffects;
+        private readonly bool hasNotInWaterStatusEffects;
 
         private Inventory parentInventory;
         private readonly ItemInventory ownInventory;
@@ -139,8 +187,15 @@ namespace Barotrauma
         private ConcurrentQueue<float> impactQueue;
 
         //a dictionary containing lists of the status effects in all the components of the item
-        private readonly bool[] hasStatusEffectsOfType;
+        private readonly bool[] hasStatusEffectsOfType = new bool[Enum.GetValues(typeof(ActionType)).Length];
         private readonly Dictionary<ActionType, List<StatusEffect>> statusEffectLists;
+
+        /// <summary>
+        /// Helper variable for handling max condition multipliers from campaign settings
+        /// </summary>
+        private readonly float conditionMultiplierCampaign = 1.0f;
+
+        public Action OnInteract;
 
         public Dictionary<Identifier, SerializableProperty> SerializableProperties { get; protected set; }
 
@@ -176,6 +231,12 @@ namespace Barotrauma
 
         public bool EditableWhenEquipped { get; set; } = false;
 
+        /// <summary>
+        /// Which character equipped this item? 
+        /// May not be the same character as the one who it's equipped on (you can e.g. equip diving masks on another character).
+        /// </summary>
+        public Character Equipper;
+
         //the inventory in which the item is contained in
         public Inventory ParentInventory
         {
@@ -186,12 +247,34 @@ namespace Barotrauma
             set
             {
                 parentInventory = value;
-                if (parentInventory != null) { Container = parentInventory.Owner as Item; }
+                if (parentInventory != null) 
+                { 
+                    Container = parentInventory.Owner as Item;
+                    RemoveFromDroppedStack(allowClientExecute: false);
+                }
 #if SERVER
                 PreviousParentInventory = value;
 #endif
             }
         }
+
+        private Item rootContainer;
+        public Item RootContainer 
+        {
+            get { return rootContainer; }
+            private set
+            {
+                if (value == this)
+                {
+                    DebugConsole.ThrowError($"Attempted to set the item \"{Prefab.Identifier}\" as it's own root container!\n{Environment.StackTrace.CleanupStackTrace()}");
+                    rootContainer = null;
+                    return;
+                }
+                rootContainer = value;
+            }
+        }
+
+        private bool inWaterProofContainer;
 
         private Item container;
         public Item Container
@@ -204,10 +287,16 @@ namespace Barotrauma
                     container = value;
                     CheckCleanable();
                     SetActiveSprite();
+                    RefreshRootContainer();
                 }
             }
         }
                 
+        /// <summary>
+        /// Note that this is not a <see cref="LocalizedString"/> instance, just the current name of the item as a string.
+        /// If you e.g. set this as the text in a textbox, it will not update automatically when the language is changed.
+        /// If you want that to happen, use <see cref="Prefab.Name"/> instead.
+        /// </summary>
         public override string Name
         {
             get { return base.Prefab.Name.Value; }
@@ -218,6 +307,37 @@ namespace Barotrauma
         {
             get { return description ?? base.Prefab.Description.Value; }
             set { description = value; }
+        }
+
+        private string descriptionTag;
+
+        [Serialize("", IsPropertySaveable.Yes, alwaysUseInstanceValues: true), ConditionallyEditable(ConditionallyEditable.ConditionType.OnlyByStatusEffectsAndNetwork)]
+        /// <summary>
+        /// Can be used to set a localized description via StatusEffects
+        /// </summary>
+        public string DescriptionTag
+        {
+            get { return descriptionTag; }
+            set 
+            {
+                if (value == descriptionTag) { return; }                
+                if (value.IsNullOrEmpty())
+                {
+                    descriptionTag = null;
+                    description = null;
+                }
+                else
+                {
+                    description = TextManager.Get(value).Value;
+                    descriptionTag = value;
+                }
+                if (FullyInitialized &&
+                    SerializableProperties != null &&
+                    SerializableProperties.TryGetValue(nameof(DescriptionTag).ToIdentifier(), out SerializableProperty property))
+                {
+                    GameMain.NetworkMember?.CreateEntityEvent(this, new ChangePropertyEventData(property, this));
+                }
+            }
         }
 
         [Editable, Serialize(false, IsPropertySaveable.Yes, alwaysUseInstanceValues: true)]
@@ -273,7 +393,7 @@ namespace Barotrauma
                 return true;
             }
 #endif
-            if (HiddenInGame) { return false; }
+            if (IsHidden) { return false; }
             if (character != null && character.IsOnPlayerTeam)
             {
                 return IsPlayerTeamInteractable;
@@ -286,7 +406,7 @@ namespace Barotrauma
 
         public float RotationRad { get; private set; } 
 
-        [ConditionallyEditable(ConditionallyEditable.ConditionType.AllowRotating, MinValueFloat = 0.0f, MaxValueFloat = 360.0f, DecimalCount = 1, ValueStep = 1f), Serialize(0.0f, IsPropertySaveable.Yes)]
+        [ConditionallyEditable(ConditionallyEditable.ConditionType.AllowRotating, DecimalCount = 3, ForceShowPlusMinusButtons = true, ValueStep = 0.1f), Serialize(0.0f, IsPropertySaveable.Yes)]
         public float Rotation
         {
             get
@@ -296,7 +416,7 @@ namespace Barotrauma
             set
             {
                 if (!Prefab.AllowRotatingInEditor) { return; }
-                RotationRad = MathHelper.ToRadians(value);
+                RotationRad = MathUtils.WrapAnglePi(MathHelper.ToRadians(value));
 #if CLIENT
                 if (Screen.Selected == GameMain.SubEditorScreen)
                 {
@@ -360,7 +480,7 @@ namespace Barotrauma
             set
             {
                 if (scale == value) { return; }
-                scale = MathHelper.Clamp(value, 0.01f, 10.0f);
+                scale = MathHelper.Clamp(value, Prefab.MinScale, Prefab.MaxScale);
 
                 float relativeScale = scale / base.Prefab.Scale;
 
@@ -395,14 +515,15 @@ namespace Barotrauma
             set { spriteColor = value; }
         }
 
-        [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes), Editable]
+        [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes), ConditionallyEditable(ConditionallyEditable.ConditionType.Pickable)]
         public Color InventoryIconColor
         {
             get;
             protected set;
         }
 
-        [Editable, Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes, description: "Changes the color of the item this item is contained inside. Only has an effect if either of the UseContainedSpriteColor or UseContainedInventoryIconColor property of the container is set to true.")]
+        [Serialize("1.0,1.0,1.0,1.0", IsPropertySaveable.Yes, description: "Changes the color of the item this item is contained inside. Only has an effect if either of the UseContainedSpriteColor or UseContainedInventoryIconColor property of the container is set to true."), 
+            ConditionallyEditable(ConditionallyEditable.ConditionType.Pickable)]
         public Color ContainerColor
         {
             get;
@@ -423,14 +544,46 @@ namespace Barotrauma
             }
         }
 
+        /// <summary>
+        /// Can be used by status effects or conditionals to check whether the item is contained inside something
+        /// </summary>
+        public bool IsContained
+        {
+            get
+            {
+                return parentInventory != null;
+            }
+        }
+
+        /// <summary>
+        /// Can be used by status effects or conditionals to the speed of the item
+        /// </summary>
+        public float Speed
+        {
+            get
+            {
+                if (body != null && body.PhysEnabled)
+                {
+                    return body.LinearVelocity.Length();
+                }
+                else if (ParentInventory?.Owner is Character character)
+                {
+                    return character.AnimController.MainLimb.LinearVelocity.Length();
+                }
+                else if (container != null)
+                {
+                    return container.Speed;
+                }
+                return 0.0f;
+            }
+        }
+
         public Color? HighlightColor;
-
-
-        [Serialize("", IsPropertySaveable.Yes)]
 
         /// <summary>
         /// Can be used to modify the AITarget's label using status effects
         /// </summary>
+        [Serialize("", IsPropertySaveable.Yes)]
         public string SonarLabel
         {
             get { return AiTarget?.SonarLabel?.Value ?? ""; }
@@ -438,7 +591,8 @@ namespace Barotrauma
             {
                 if (AiTarget != null)
                 {
-                    AiTarget.SonarLabel = !string.IsNullOrEmpty(value) && value.Length > 200 ? value.Substring(200) : value;
+                    string trimmedStr = !string.IsNullOrEmpty(value) && value.Length > 250 ? value.Substring(250) : value;
+                    AiTarget.SonarLabel = TextManager.Get(trimmedStr).Fallback(trimmedStr);
                 }
             }
         }
@@ -454,20 +608,20 @@ namespace Barotrauma
             }
         }
 
-        [Serialize(0.0f, IsPropertySaveable.No)]
         /// <summary>
         /// Can be used by status effects or conditionals to modify the sound range
         /// </summary>
+        [Serialize(0.0f, IsPropertySaveable.No)]
         public new float SoundRange
         {
             get { return aiTarget == null ? 0.0f : aiTarget.SoundRange; }
             set { if (aiTarget != null) { aiTarget.SoundRange = Math.Max(0.0f, value); } }
         }
 
-        [Serialize(0.0f, IsPropertySaveable.No)]
         /// <summary>
         /// Can be used by status effects or conditionals to modify the sight range
         /// </summary>
+        [Serialize(0.0f, IsPropertySaveable.No)]
         public new float SightRange
         {
             get { return aiTarget == null ? 0.0f : aiTarget.SightRange; }
@@ -498,6 +652,14 @@ namespace Barotrauma
             get; set;
         }
 
+        /// <summary>
+        /// Can be set by status effects to prevent bots from cleaning up the item
+        /// </summary>
+        public bool DontCleanUp
+        {
+            get; set;
+        }
+
         public Color Color
         {
             get { return spriteColor; }
@@ -506,6 +668,18 @@ namespace Barotrauma
         public bool IsFullCondition { get; private set; }
         public float MaxCondition { get; private set; }
         public float ConditionPercentage { get; private set; }
+
+        /// <summary>
+        /// Condition percentage disregarding MaxRepairConditionMultiplier (i.e. this can go above 100% if the item is repaired beyond the normal maximum)
+        /// </summary>
+        public float ConditionPercentageRelativeToDefaultMaxCondition
+        {
+            get
+            {
+                float defaultMaxCondition = MaxCondition / MaxRepairConditionMultiplier;
+                return MathUtils.Percentage(Condition, defaultMaxCondition);
+            }
+        }
 
         private float offsetOnSelectedMultiplier = 1.0f;
 
@@ -544,6 +718,9 @@ namespace Barotrauma
                 RecalculateConditionValues();
             }
         }
+
+        [Serialize(false, IsPropertySaveable.Yes)]
+        private bool HasBeenInstantiatedOnce { get; set; }
         
         //the default value should be Prefab.Health, but because we can't use it in the attribute, 
         //we'll just use NaN (which does nothing) and set the default value in the constructor/load
@@ -588,7 +765,16 @@ namespace Barotrauma
         [Editable, Serialize(false, isSaveable: IsPropertySaveable.Yes, "When enabled will prevent the item from taking damage from all sources")]
         public bool InvulnerableToDamage { get; set; }
 
+        /// <summary>
+        /// Was the item stolen during the current round. Note that it's possible for the items to be found in the player's inventory even though they weren't actually stolen.
+        /// For example, a guard can place handcuffs there. So use <see cref="Illegitimate"/> for checking if the item is illegitimately held.
+        /// </summary>
         public bool StolenDuringRound;
+        
+        /// <summary>
+        /// Item shouldn't be in the player's inventory. If the guards find it, they will consider it as a theft.
+        /// </summary>
+        public bool Illegitimate => !AllowStealing && SpawnedInCurrentOutpost;
 
         private bool spawnedInCurrentOutpost;
         public bool SpawnedInCurrentOutpost
@@ -598,18 +784,22 @@ namespace Barotrauma
             {
                 if (!spawnedInCurrentOutpost && value)
                 {
-                    OriginalOutpost = GameMain.GameSession?.StartLocation?.BaseName ?? "";
+                    OriginalOutpost = GameMain.GameSession?.LevelData?.Seed;
                 }
                 spawnedInCurrentOutpost = value;
             }
         }
 
-        [Serialize(true, IsPropertySaveable.Yes, alwaysUseInstanceValues: true)]
-        public bool AllowStealing
+        private bool allowStealing;
+        [Serialize(true, IsPropertySaveable.Yes, alwaysUseInstanceValues: true, 
+            description: $"Determined by where/how the item originally spawned. If ItemPrefab.AllowStealing is true, stealing the item is always allowed.")]
+        public bool AllowStealing 
         {
-            get;
-            set;
+            get { return allowStealing || Prefab.AllowStealingAlways;  }
+            set { allowStealing = value; }
         }
+
+        public bool IsSalvageMissionItem;
 
         private string originalOutpost;
         [Serialize("", IsPropertySaveable.Yes, alwaysUseInstanceValues: true)]
@@ -619,7 +809,9 @@ namespace Barotrauma
             set
             {
                 originalOutpost = value;
-                if (!string.IsNullOrEmpty(value) && GameMain.GameSession?.LevelData?.Type == LevelData.LevelType.Outpost && GameMain.GameSession?.StartLocation?.BaseName == value)
+                if (!string.IsNullOrEmpty(value) && 
+                    GameMain.GameSession?.LevelData?.Type == LevelData.LevelType.Outpost &&
+                    GameMain.GameSession?.LevelData?.Seed == value)
                 {
                     spawnedInCurrentOutpost = true;
                 }
@@ -648,14 +840,26 @@ namespace Barotrauma
             }
         }
 
+        [Serialize(false, IsPropertySaveable.No)]
         public bool FireProof
         {
-            get { return Prefab.FireProof; }
+            get; private set;
         }
 
+        private bool waterProof;
+        [Serialize(false, IsPropertySaveable.No)]
         public bool WaterProof
         {
-            get { return Prefab.WaterProof; }
+            get { return waterProof; }
+            private set
+            {
+                if (waterProof == value) { return; }
+                waterProof = value;
+                foreach (Item containedItem in ContainedItems)
+                {
+                    containedItem.RefreshInWaterProofContainer();
+                }
+            }
         }
 
         public bool UseInHealthInterface
@@ -684,7 +888,7 @@ namespace Barotrauma
             {
                 //if the item has an active physics body, inWater is updated in the Update method
                 if (body != null && body.Enabled) { return inWater; }
-                if (hasWaterStatusEffects) { return inWater; }
+                if (hasInWaterStatusEffects) { return inWater; }
 
                 //if not, we'll just have to check
                 return IsInWater();
@@ -726,7 +930,25 @@ namespace Barotrauma
         {
             get
             {
-                return ownInventory?.AllItems ?? Enumerable.Empty<Item>();
+                if (OwnInventories.Length < 2)
+                {
+                    if (OwnInventory == null) { yield break; }
+
+                    foreach (var item in OwnInventory.AllItems)
+                    {
+                        yield return item;
+                    }
+                }
+                else
+                {
+                    foreach (var inventory in OwnInventories)
+                    {
+                        foreach (var item in inventory.AllItems)
+                        {
+                            yield return item;
+                        }
+                    }
+                }
             }
         }
 
@@ -734,6 +956,8 @@ namespace Barotrauma
         {
             get { return ownInventory; }
         }
+
+        public readonly ImmutableArray<ItemInventory> OwnInventories = ImmutableArray<ItemInventory>.Empty;
 
         [Editable, Serialize(false, IsPropertySaveable.Yes, description:
             "Enable if you want to display the item HUD side by side with another item's HUD, when linked together. " +
@@ -797,8 +1021,8 @@ namespace Barotrauma
         {
             get { return allPropertyObjects; }
         }
-        
-        public bool IgnoreByAI(Character character) => HasTag("ignorebyai") || OrderedToBeIgnored && character.IsOnPlayerTeam;
+
+        public bool IgnoreByAI(Character character) => HasTag(Barotrauma.Tags.ItemIgnoredByAI) || OrderedToBeIgnored && character.IsOnPlayerTeam;
         public bool OrderedToBeIgnored { get; set; }
 
         public bool HasBallastFloraInHull
@@ -818,9 +1042,29 @@ namespace Barotrauma
             }
         }
 
+        public bool InPlayerSubmarine => Submarine?.Info is { IsPlayer: true };
+        public bool InBeaconStation => Submarine?.Info is { Type: SubmarineType.BeaconStation };
+
         public bool IsLadder { get; }
 
         public bool IsSecondaryItem { get; }
+
+        private ItemStatManager statManager;
+        public ItemStatManager StatManager
+        {
+            get
+            {
+               statManager ??= new ItemStatManager(this);
+               return statManager;
+            }
+        }
+
+        /// <summary>
+        /// Timing.TotalTimeUnpaused when some character was last eating the item
+        /// </summary>
+        public float LastEatenTime { get; set; }
+
+        public Action<Character> OnDeselect;
 
         public Item(ItemPrefab itemPrefab, Vector2 position, Submarine submarine, ushort id = Entity.NullEntityID, bool callOnItemLoaded = true)
             : this(new Rectangle(
@@ -850,7 +1094,7 @@ namespace Barotrauma
             defaultRect = newRect;
             rect = newRect;
 
-            condition = MaxCondition =  Prefab.Health;
+            condition = MaxCondition = prevCondition = Prefab.Health;
             ConditionPercentage = 100.0f;
            
             lastSentCondition = condition;
@@ -887,8 +1131,8 @@ namespace Barotrauma
                         string collisionCategoryStr = subElement.GetAttributeString("collisioncategory", null);
 
                         Category collisionCategory = Physics.CollisionItem;
-                        Category collidesWith = Physics.CollisionWall | Physics.CollisionLevel | Physics.CollisionPlatform;
-                        if ((Prefab.DamagedByProjectiles || Prefab.DamagedByMeleeWeapons) && Condition > 0)
+                        Category collidesWith = Physics.DefaultItemCollidesWith;
+                        if ((Prefab.DamagedByProjectiles || Prefab.DamagedByMeleeWeapons || Prefab.DamagedByRepairTools) && Condition > 0)
                         {
                             //force collision category to Character to allow projectiles and weapons to hit
                             //(we could also do this by making the projectiles and weapons hit CollisionItem
@@ -901,7 +1145,8 @@ namespace Barotrauma
                         {                            
                             if (!Physics.TryParseCollisionCategory(collisionCategoryStr, out Category cat))
                             {
-                                DebugConsole.ThrowError("Invalid collision category in item \"" + Name+"\" (" + collisionCategoryStr + ")");
+                                DebugConsole.ThrowError("Invalid collision category in item \"" + Name + "\" (" + collisionCategoryStr + ")",
+                                    contentPackage: element.ContentPackage);
                             }
                             else
                             {
@@ -940,6 +1185,7 @@ namespace Barotrauma
                     case "infectedsprite":
                     case "damagedinfectedsprite":
                     case "swappableitem":
+                    case "skillrequirementhint":
                         break;
                     case "staticbody":
                         StaticBodyConfig = subElement;
@@ -952,18 +1198,10 @@ namespace Barotrauma
                         if (ic == null) break;
 
                         AddComponent(ic);
-
-                        if (ic is IDrawableComponent && ic.Drawable)
-                        {
-                            drawableComponents.Add(ic as IDrawableComponent);
-                            hasComponentsToDraw = true;
-                        }
-                        if (ic is Repairable) repairables.Add((Repairable)ic);
                         break;
                 }
             }
 
-            hasStatusEffectsOfType = new bool[Enum.GetValues(typeof(ActionType)).Length];
             foreach (ItemComponent ic in components)
             {
                 if (ic is Pickable pickable)
@@ -974,12 +1212,23 @@ namespace Barotrauma
                     }
                 }
 
-                if (ic.statusEffectLists == null) { continue; }
+                if (ic is Repairable repairable) { repairables.Add(repairable); }
 
-                if (statusEffectLists == null)
+                if (ic is IDrawableComponent && ic.Drawable)
                 {
-                    statusEffectLists = new Dictionary<ActionType, List<StatusEffect>>();
+                    drawableComponents.Add(ic as IDrawableComponent);
+                    hasComponentsToDraw = true;
                 }
+
+                if (ic.statusEffectLists == null) { continue; }
+                if (ic.InheritStatusEffects)
+                {
+                    // Inherited status effects are added when the ItemComponent is initialized at ItemComponent.cs:332.
+                    // Don't create duplicate effects here.
+                    continue;
+                }
+
+                statusEffectLists ??= new Dictionary<ActionType, List<StatusEffect>>();
 
                 //go through all the status effects of the component 
                 //and add them to the corresponding statuseffect list
@@ -1000,13 +1249,13 @@ namespace Barotrauma
                 }
             }
 
-            hasWaterStatusEffects = hasStatusEffectsOfType[(int)ActionType.InWater] || hasStatusEffectsOfType[(int)ActionType.NotInWater];
+            hasInWaterStatusEffects = hasStatusEffectsOfType[(int)ActionType.InWater];
+            hasNotInWaterStatusEffects = hasStatusEffectsOfType[(int)ActionType.NotInWater];
 
             if (body != null)
             {
                 body.Submarine = submarine;
-                waterDragCoefficient = bodyElement.GetAttributeFloat("waterdragcoefficient", 
-                    GetComponent<Projectile>() != null || GetComponent<Throwable>() != null ? 0.1f : 1.0f);
+                originalWaterDragCoefficient = bodyElement.GetAttributeFloat("waterdragcoefficient", 5.0f);
             }
 
             //cache connections into a dictionary for faster lookups
@@ -1032,6 +1281,8 @@ namespace Barotrauma
                 ownInventory = itemContainer.Inventory;
             }
 
+            OwnInventories = GetComponents<ItemContainer>().Select(ic => ic.Inventory).ToImmutableArray();
+
             qualityComponent = GetComponent<Quality>();
 
             IsLadder = GetComponent<Ladder>() != null;
@@ -1047,25 +1298,57 @@ namespace Barotrauma
                 }
             }
 
+            var holdables = components.Where(c => c is Holdable);
+            if (holdables.Count() > 1)
+            {
+                DebugConsole.AddWarning($"Item {Prefab.Identifier} has multiple {nameof(Holdable)} components ({string.Join(", ", holdables.Select(h => h.GetType().Name))}).",
+                    Prefab.ContentPackage);
+            }
+
             InsertToList();
             ItemList.Add(this);
             if (Prefab.IsDangerous) { dangerousItems.Add(this); }
             if (Repairables.Any()) { repairableItems.Add(this); }
+            if (Prefab.SonarSize > 0.0f) { sonarVisibleItems.Add(this); }
             CheckCleanable();
 
             DebugConsole.Log("Created " + Name + " (" + ID + ")");
 
             if (Components.Any(ic => ic is Wire) && Components.All(ic => ic is Wire || ic is Holdable)) { isWire = true; }
-            if (HasTag("logic")) { isLogic = true; }
-
-            GameMain.LuaCs.Hook.Call("item.created", this);
+            if (HasTag(Barotrauma.Tags.LogicItem)) { isLogic = true; }
 
             ApplyStatusEffects(ActionType.OnSpawn, 1.0f);
-            Components.ForEach(c => c.ApplyStatusEffects(ActionType.OnSpawn, 1.0f));
+
+            // Set max condition multipliers from campaign settings for RecalculateConditionValues()
+            if (GameMain.GameSession?.Campaign is CampaignMode campaign)
+            {
+                if (HasTag(Barotrauma.Tags.OxygenSource))
+                {
+                    conditionMultiplierCampaign *= campaign.Settings.OxygenMultiplier;
+                }
+                if (HasTag(Barotrauma.Tags.Fuel))
+                {
+                    conditionMultiplierCampaign *= campaign.Settings.FuelMultiplier;
+                }
+            }
+            if (!HasBeenInstantiatedOnce)
+            {
+                // This only needs to be done on the very first instantiation.
+                // MaxCondition will be multiplied in RecalculateConditionValues(), ensuring
+                // that Condition will stay in line with the multiplier from then on.
+                condition *= conditionMultiplierCampaign;
+            }
+
             RecalculateConditionValues();
+
+            if (callOnItemLoaded)
+            {
+                FullyInitialized = true;
+            }
 #if CLIENT
             Submarine.ForceVisibilityRecheck();
 #endif
+            HasBeenInstantiatedOnce = true; // Enable executing certain things only once
         }
 
         partial void InitProjSpecific();
@@ -1081,7 +1364,7 @@ namespace Barotrauma
             };
             foreach (KeyValuePair<Identifier, SerializableProperty> property in SerializableProperties)
             {
-                if (!property.Value.Attributes.OfType<Editable>().Any()) continue;
+                if (property.Value.Attributes.OfType<Serialize>().None()) { continue; }
                 clone.SerializableProperties[property.Key].TrySetValue(clone, property.Value.GetValue(this));
             }
 
@@ -1096,43 +1379,77 @@ namespace Barotrauma
 
             for (int i = 0; i < components.Count && i < clone.components.Count; i++)
             {
-                foreach (KeyValuePair<Identifier, SerializableProperty> property in components[i].SerializableProperties)
+                //order the properties to get them to be applied in a consistent order (may matter for properties that are interconnected somehow, like IsOn/IsActive)
+                foreach (KeyValuePair<Identifier, SerializableProperty> property in components[i].SerializableProperties.OrderBy(s => s.Key))
                 {
-                    if (!property.Value.Attributes.OfType<Editable>().Any()) continue;
+                    if (property.Value.Attributes.OfType<Serialize>().None()) { continue; }
                     clone.components[i].SerializableProperties[property.Key].TrySetValue(clone.components[i], property.Value.GetValue(components[i]));
                 }
 
                 //clone requireditem identifiers
-                foreach (var kvp in components[i].requiredItems)
+                foreach (var kvp in components[i].RequiredItems)
                 {
                     for (int j = 0; j < kvp.Value.Count; j++)
                     {
-                        if (!clone.components[i].requiredItems.ContainsKey(kvp.Key) ||
-                            clone.components[i].requiredItems[kvp.Key].Count <= j)
+                        if (!clone.components[i].RequiredItems.ContainsKey(kvp.Key) ||
+                            clone.components[i].RequiredItems[kvp.Key].Count <= j)
                         {
                             continue;
                         }
 
-                        clone.components[i].requiredItems[kvp.Key][j].JoinedIdentifiers = 
+                        clone.components[i].RequiredItems[kvp.Key][j].JoinedIdentifiers = 
                             kvp.Value[j].JoinedIdentifiers;
                     }
                 }
             }
 
-            if (FlippedX) clone.FlipX(false);
-            if (FlippedY) clone.FlipY(false);
-            
+            if (FlippedX) { clone.FlipX(false); }
+            if (FlippedY) { clone.FlipY(false); }
+
+            // Flipping an item tampers with its rotation, so restore it
+            clone.Rotation = Rotation;
+
             foreach (ItemComponent component in clone.components)
             {
                 component.OnItemLoaded();
             }
 
-            foreach (Item containedItem in ContainedItems)
+            Dictionary<ushort, Item> clonedContainedItems = new();
+
+            for (int i = 0; i < components.Count && i < clone.components.Count; i++)
             {
-                var containedClone = containedItem.Clone();
-                clone.ownInventory.TryPutItem(containedClone as Item, null);
+                ItemComponent component = components[i],
+                              cloneComp = clone.components[i];
+
+                if (component is not ItemContainer origInv ||
+                    cloneComp is not ItemContainer cloneInv)
+                {
+                    continue;
+                }
+
+                foreach (var containedItem in origInv.Inventory.AllItems)
+                {
+                    var containedClone = (Item)containedItem.Clone();
+
+                    cloneInv.Inventory.TryPutItem(containedClone, null);
+                    clonedContainedItems.Add(containedItem.ID, containedClone);
+                }
             }
-                        
+
+            for (int i = 0; i < components.Count && i < clone.components.Count; i++)
+            {
+                ItemComponent component = components[i],
+                              cloneComp = clone.components[i];
+
+                if (component is not CircuitBox origBox || cloneComp is not CircuitBox cloneBox)
+                {
+                    continue;
+                }
+
+                cloneBox.CloneFrom(origBox, clonedContainedItems);
+            }
+
+            clone.FullyInitialized = true;
             return clone;
         }
 
@@ -1334,7 +1651,7 @@ namespace Barotrauma
             var pickable = GetComponent<Pickable>();
             if (pickable != null && !pickable.IsAttached &&
                 Prefab.PreferredContainers.Any() &&
-                (container == null || container.HasTag("allowcleanup")))
+                (container == null || container.HasTag(Barotrauma.Tags.AllowCleanup)))
             {
                 if (!cleanableItems.Contains(this))
                 {
@@ -1347,7 +1664,7 @@ namespace Barotrauma
             }
         }
 
-        public override void Move(Vector2 amount, bool ignoreContacts = false)
+        public override void Move(Vector2 amount, bool ignoreContacts = true)
         {
             if (!MathUtils.IsValid(amount))
             {
@@ -1355,7 +1672,7 @@ namespace Barotrauma
                 return;
             }
 
-            base.Move(amount);
+            base.Move(amount, ignoreContacts);
 
             if (ItemList != null && body != null)
             {
@@ -1399,6 +1716,9 @@ namespace Barotrauma
             return transformedRect;
         }
 
+        public override Quad2D GetTransformedQuad()
+            => Quad2D.FromSubmarineRectangle(rect).Rotated(-RotationRad);
+
         /// <summary>
         /// goes through every item and re-checks which hull they are in
         /// </summary>
@@ -1439,17 +1759,57 @@ namespace Barotrauma
             return CurrentHull;
         }
 
-        public Item GetRootContainer()
+        private void RefreshRootContainer()
         {
-            if (Container == null) { return null; }
-            Item rootContainer = Container;
-            while (rootContainer.Container != null)
+            Item newRootContainer = null;
+            inWaterProofContainer = false;
+            if (Container != null)
             {
-                rootContainer = rootContainer.Container;
+                Item rootContainer = Container;
+                inWaterProofContainer |= Container.WaterProof;
+
+                while (rootContainer.Container != null)
+                {
+                    rootContainer = rootContainer.Container;
+                    if (rootContainer == this)
+                    {
+                        DebugConsole.ThrowError($"Invalid container hierarchy: \"{Prefab.Identifier}\" was contained inside itself!\n{Environment.StackTrace.CleanupStackTrace()}");
+                        rootContainer = null;
+                        break;
+                    }
+                    inWaterProofContainer |= rootContainer.WaterProof;
+                }
+                newRootContainer = rootContainer;
             }
-            return rootContainer;
+            if (newRootContainer != RootContainer)
+            {
+                RootContainer = newRootContainer;
+                isActive = true;
+                foreach (Item containedItem in ContainedItems)
+                {
+                    containedItem.RefreshRootContainer();
+                }
+            }
         }
-        
+
+        private void RefreshInWaterProofContainer()
+        {
+            inWaterProofContainer = false;
+            if (container == null) { return; }
+            if (container.WaterProof || container.inWaterProofContainer)
+            {
+                inWaterProofContainer = true;
+            }
+            foreach (Item containedItem in ContainedItems)
+            {
+                containedItem.RefreshInWaterProofContainer();
+            }
+        }
+
+        /// <summary>
+        /// Used by the AI to check whether they can (in principle) and are allowed (in practice) to interact with an object or not.
+        /// Unlike CanInteractWith(), this method doesn't check the distance, the triggers, or anything like that.
+        /// </summary>
         public bool HasAccess(Character character)
         {
             if (character.IsBot && IgnoreByAI(character)) { return false; }
@@ -1457,6 +1817,7 @@ namespace Barotrauma
             var itemContainer = GetComponent<ItemContainer>();
             if (itemContainer != null && !itemContainer.HasAccess(character)) { return false; }
             if (Container != null && !Container.HasAccess(character)) { return false; }
+            if (GetComponent<Pickable>() is { CanBePicked: false }) { return false; }
             return true;
         }
 
@@ -1466,9 +1827,8 @@ namespace Barotrauma
         {
             if (ParentInventory == null) { return this; }
             if (ParentInventory.Owner is Character) { return ParentInventory.Owner; }
-            var rootContainer = GetRootContainer();
-            if (rootContainer?.ParentInventory?.Owner is Character) { return rootContainer.ParentInventory.Owner; }
-            return rootContainer ?? this;
+            if (RootContainer?.ParentInventory?.Owner is Character) { return RootContainer.ParentInventory.Owner; }
+            return RootContainer ?? this;
         }
 
         public Inventory FindParentInventory(Func<Inventory, bool> predicate)
@@ -1505,17 +1865,28 @@ namespace Barotrauma
             if (tags.Contains(tag)) { return; }
             tags.Add(tag);
         }
-
-
-        public bool HasTag(string tag)
+        
+        public void RemoveTag(Identifier tag)
         {
-            return HasTag(tag.ToIdentifier());
+            if (!tags.Contains(tag)) { return; }
+            tags.Remove(tag);
         }
 
         public bool HasTag(Identifier tag)
         {
             if (tag == null) { return true; }
             return tags.Contains(tag) || base.Prefab.Tags.Contains(tag);
+        }
+
+        public bool HasIdentifierOrTags(IEnumerable<Identifier> identifiersOrTags)
+        {
+            if (identifiersOrTags == null) { return false; }
+            if (identifiersOrTags.Contains(Prefab.Identifier)) { return true; }
+            foreach (Identifier tag in identifiersOrTags)
+            {
+                if (HasTag(tag)) { return true; }
+            }
+            return false;
         }
 
         public void ReplaceTag(string tag, string newTag)
@@ -1530,7 +1901,7 @@ namespace Barotrauma
             tags.Add(newTag);
         }
 
-        public IEnumerable<Identifier> GetTags()
+        public IReadOnlyCollection<Identifier> GetTags()
         {
             return tags;
         }
@@ -1547,7 +1918,23 @@ namespace Barotrauma
 
         public bool ConditionalMatches(PropertyConditional conditional)
         {
-            if (string.IsNullOrEmpty(conditional.TargetItemComponentName))
+            return ConditionalMatches(conditional, checkContainer: true);
+        }
+
+        public bool ConditionalMatches(PropertyConditional conditional, bool checkContainer)
+        {
+            if (checkContainer)
+            {
+                if (conditional.TargetContainer)
+                {
+                    if (conditional.TargetGrandParent)
+                    {
+                        return container?.container != null && container.container.ConditionalMatches(conditional, checkContainer: false);
+                    }
+                    return container != null && container.ConditionalMatches(conditional, checkContainer: false);
+                }
+            }
+            if (string.IsNullOrEmpty(conditional.TargetItemComponent))
             {
                 if (!conditional.Matches(this)) { return false; }
             }
@@ -1555,20 +1942,23 @@ namespace Barotrauma
             {
                 foreach (ItemComponent component in components)
                 {
-                    if (component.Name != conditional.TargetItemComponentName) { continue; }
+                    if (component.Name != conditional.TargetItemComponent) { continue; }
                     if (!conditional.Matches(component)) { return false; }
                 }
             }
             return true;
         }
 
+        /// <summary>
+        /// Executes all StatusEffects of the specified type. Note that condition checks are ignored here: that should be handled by the code calling the method.
+        /// </summary>
         public void ApplyStatusEffects(ActionType type, float deltaTime, Character character = null, Limb limb = null, Entity useTarget = null, bool isNetworkEvent = false, Vector2? worldPosition = null)
         {
             if (!hasStatusEffectsOfType[(int)type]) { return; }
 
             foreach (StatusEffect effect in statusEffectLists[type])
             {
-                ApplyStatusEffect(effect, type, deltaTime, character, limb, useTarget, isNetworkEvent, false, worldPosition);
+                ApplyStatusEffect(effect, type, deltaTime, character, limb, useTarget, isNetworkEvent, checkCondition: false, worldPosition);
             }
         }
         
@@ -1576,11 +1966,7 @@ namespace Barotrauma
 
         public void ApplyStatusEffect(StatusEffect effect, ActionType type, float deltaTime, Character character = null, Limb limb = null, Entity useTarget = null, bool isNetworkEvent = false, bool checkCondition = true, Vector2? worldPosition = null)
         {
-            if (effect.intervalTimer > 0.0f)
-            {
-                effect.intervalTimer -= deltaTime;
-                return;
-            }
+            if (effect.ShouldWaitForInterval(this, deltaTime)) { return; }
             if (!isNetworkEvent && checkCondition)
             {
                 if (condition == 0.0f && !effect.AllowWhenBroken && effect.type != ActionType.OnBroken) { return; }
@@ -1604,7 +1990,7 @@ namespace Barotrauma
 
                     if (effect.TargetSlot > -1)
                     {
-                        if (OwnInventory.FindIndex(containedItem) != effect.TargetSlot) { continue; }
+                        if (!OwnInventory.GetItemsAt(effect.TargetSlot).Contains(containedItem)) { continue; }
                     }
 
                     hasTargets = true;
@@ -1614,7 +2000,7 @@ namespace Barotrauma
 
             if (effect.HasTargetType(StatusEffect.TargetType.NearbyCharacters) || effect.HasTargetType(StatusEffect.TargetType.NearbyItems))
             {
-                targets.AddRange(effect.GetNearbyTargets(WorldPosition, targets));
+                effect.AddNearbyTargets(WorldPosition, targets);
                 if (targets.Count > 0)
                 {
                     hasTargets = true;
@@ -1657,25 +2043,32 @@ namespace Barotrauma
                 }
                 if (effect.HasTargetType(StatusEffect.TargetType.AllLimbs))
                 {
-                    targets.AddRange(character.AnimController.Limbs.ToList());
+                    targets.AddRange(character.AnimController.Limbs);
+                }
+                if (effect.HasTargetType(StatusEffect.TargetType.Limb) && limb == null && effect.targetLimbs != null)
+                {
+                    foreach (var characterLimb in character.AnimController.Limbs)
+                    {
+                        if (effect.targetLimbs.Contains(characterLimb.type)) { targets.Add(characterLimb); }
+                    }
                 }
             }
-            if (effect.HasTargetType(StatusEffect.TargetType.Limb))
+            if (effect.HasTargetType(StatusEffect.TargetType.Limb) && limb != null)
             {
                 targets.Add(limb);
             }
 
-            if (Container != null && effect.HasTargetType(StatusEffect.TargetType.Parent)) { targets.Add(Container); }
+            if (Container != null && effect.HasTargetType(StatusEffect.TargetType.Parent)) { targets.AddRange(Container.AllPropertyObjects); }
             
             effect.Apply(type, deltaTime, this, targets, worldPosition);            
         }
 
 
-        public AttackResult AddDamage(Character attacker, Vector2 worldPosition, Attack attack, float deltaTime, bool playSound = true)
+        public AttackResult AddDamage(Character attacker, Vector2 worldPosition, Attack attack,  Vector2 impulseDirection, float deltaTime,bool playSound = true)
         {
             if (Indestructible || InvulnerableToDamage) { return new AttackResult(); }
 
-            float damageAmount = attack.GetItemDamage(deltaTime);
+            float damageAmount = attack.GetItemDamage(deltaTime, Prefab.ItemDamageMultiplier);
             Condition -= damageAmount;
 
             if (damageAmount >= Prefab.OnDamagedThreshold)
@@ -1686,7 +2079,7 @@ namespace Barotrauma
             return new AttackResult(damageAmount, null);
         }
 
-        private void SetCondition(float value, bool isNetworkEvent)
+        private void SetCondition(float value, bool isNetworkEvent, bool executeEffects = true)
         {
             if (!isNetworkEvent)
             {
@@ -1696,29 +2089,52 @@ namespace Barotrauma
             if (Indestructible) { return; }
             if (InvulnerableToDamage && value <= condition) { return; }
 
-            float prev = condition;
             bool wasInFullCondition = IsFullCondition;
 
+            float diff = value - condition;
+            if (GetComponent<Door>() is Door door && door.IsStuck && diff < 0)
+            {
+                float dmg = -diff;
+                // When the door is fully welded shut, reduce the welded state instead of the condition.
+                float prevStuck = door.Stuck;
+                door.Stuck -= dmg;
+                if (door.IsStuck) { return; }
+                // Reduce the damage by the amount we just adjusted the welded state by.
+                float damageReduction = dmg - prevStuck;
+                if (damageReduction < 0) { return; }
+                value -= damageReduction;
+            }
+
             condition = MathHelper.Clamp(value, 0.0f, MaxCondition);
-            if (MathUtils.NearlyEqual(prev, condition, epsilon: 0.000001f)) { return; }
+
+            if (MathUtils.NearlyEqual(prevCondition, value, epsilon: 0.000001f)) { return; }
 
             RecalculateConditionValues();
 
-            if (condition == 0.0f && prev > 0.0f)
+            bool wasPreviousConditionChanged = false;
+            if (condition == 0.0f && prevCondition > 0.0f)
             {
                 //Flag connections to be updated as device is broken
                 flagChangedConnections(connections);
 #if CLIENT
-                foreach (ItemComponent ic in components)
-                {
-                    ic.PlaySound(ActionType.OnBroken);
-                    ic.StopSounds(ActionType.OnActive);
+                if (executeEffects)
+                {                
+                    foreach (ItemComponent ic in components)
+                    {
+                        ic.PlaySound(ActionType.OnBroken);
+                        ic.StopSounds(ActionType.OnActive);
+                    }
                 }
                 if (Screen.Selected == GameMain.SubEditorScreen) { return; }
 #endif
-                ApplyStatusEffects(ActionType.OnBroken, 1.0f, null);
+                // Have to set the previous condition here or OnBroken status effects that reduce the condition will keep triggering the status effects, resulting in a stack overflow.
+                SetPreviousCondition();
+                if (executeEffects)
+                {
+                    ApplyStatusEffects(ActionType.OnBroken, 1.0f, null);
+                }
             }
-            else if (condition > 0.0f && prev <= 0.0f)
+            else if (condition > 0.0f && prevCondition <= 0.0f)
             {
                 //Flag connections to be updated as device is now working again
                 flagChangedConnections(connections);
@@ -1728,26 +2144,35 @@ namespace Barotrauma
 
             if (GameMain.NetworkMember != null && GameMain.NetworkMember.IsServer)
             {
-                if (Math.Abs(lastSentCondition - condition) > 1.0f)
+                bool needsConditionUpdate = false;
+                if (!MathUtils.NearlyEqual(lastSentCondition, condition) && (condition <= 0.0f || condition >= MaxCondition))
                 {
-                    conditionUpdatePending = true;
-                    isActive = true;
-                }
-                else if (wasInFullCondition != IsFullCondition)
-                {
-                    conditionUpdatePending = true;
-                    isActive = true;
-                }
-                else if (!MathUtils.NearlyEqual(lastSentCondition, condition) && (condition <= 0.0f || condition >= MaxCondition))
-                {
+                    //send the update immediately if the condition changed to max or min
                     sendConditionUpdateTimer = 0.0f;
-                    conditionUpdatePending = true;
-                    isActive = true;
+                    needsConditionUpdate = true;
+                }
+                else if (Math.Abs(lastSentCondition - condition) > 1.0f || wasInFullCondition != IsFullCondition)
+                {
+                    needsConditionUpdate = true;
+                }
+                if (needsConditionUpdate && !itemsWithPendingConditionUpdates.Contains(this))
+                {
+                    itemsWithPendingConditionUpdates.Add(this);
                 }
             }
 
-            LastConditionChange = condition - prev;
-            ConditionLastUpdated = Timing.TotalTime;
+            if (!wasPreviousConditionChanged)
+            {
+                SetPreviousCondition();
+            }
+
+            void SetPreviousCondition()
+            {
+                LastConditionChange = condition - prevCondition;
+                ConditionLastUpdated = Timing.TotalTime;
+                prevCondition = condition;
+                wasPreviousConditionChanged = true;
+            }
 
             static void flagChangedConnections(Dictionary<string, Connection> connections)
             {
@@ -1772,7 +2197,7 @@ namespace Barotrauma
         /// </summary>
         public void RecalculateConditionValues()
         {
-            MaxCondition = Prefab.Health * healthMultiplier * maxRepairConditionMultiplier * (1.0f + GetQualityModifier(Items.Components.Quality.StatType.Condition));
+            MaxCondition = Prefab.Health * healthMultiplier * conditionMultiplierCampaign * maxRepairConditionMultiplier * (1.0f + GetQualityModifier(Items.Components.Quality.StatType.Condition));
             IsFullCondition = MathUtils.NearlyEqual(Condition, MaxCondition);
             ConditionPercentage = MathUtils.Percentage(Condition, MaxCondition);
         }
@@ -1788,35 +2213,50 @@ namespace Barotrauma
         public void SendPendingNetworkUpdates()
         {
             if (!(GameMain.NetworkMember is { IsServer: true })) { return; }
-            if (!conditionUpdatePending) { return; }
-
-            CreateStatusEvent();
-            lastSentCondition = condition;
-            sendConditionUpdateTimer = NetConfig.ItemConditionUpdateInterval;
-            conditionUpdatePending = false;
+            if (!itemsWithPendingConditionUpdates.Contains(this)) { return; }
+            SendPendingNetworkUpdatesInternal();
+            itemsWithPendingConditionUpdates.Remove(this);
         }
 
-        public void CreateStatusEvent()
+        private void SendPendingNetworkUpdatesInternal()
         {
-            GameMain.NetworkMember.CreateEntityEvent(this, new ItemStatusEventData());
+            CreateStatusEvent(loadingRound: false);
+            lastSentCondition = condition;
+            sendConditionUpdateTimer = NetConfig.ItemConditionUpdateInterval;
+        }
+
+        public void CreateStatusEvent(bool loadingRound)
+        {
+            GameMain.NetworkMember.CreateEntityEvent(this, new ItemStatusEventData(loadingRound));
+        }
+
+        public static void UpdatePendingConditionUpdates(float deltaTime)
+        {
+            if (GameMain.NetworkMember is not { IsServer: true }) { return; }
+            for (int i = 0; i < itemsWithPendingConditionUpdates.Count; i++)
+            {
+                var item = itemsWithPendingConditionUpdates[i];
+                if (item == null || item.Removed)
+                {
+                    itemsWithPendingConditionUpdates.RemoveAt(i--);
+                    continue;
+                }
+                if (item.Submarine is { Loading: true }) { continue; }
+
+                item.sendConditionUpdateTimer -= deltaTime;
+                if (item.sendConditionUpdateTimer <= 0.0f)
+                {
+                    item.SendPendingNetworkUpdatesInternal();
+                    itemsWithPendingConditionUpdates.RemoveAt(i--);
+                }
+            }
         }
 
         private bool isActive = true;
 
         public override void Update(float deltaTime, Camera cam)
         {
-#if SERVER
-            if (!(Submarine is { Loading: true }))
-            {
-                sendConditionUpdateTimer -= deltaTime;
-                if (conditionUpdatePending && sendConditionUpdateTimer <= 0.0f)
-                {
-                    SendPendingNetworkUpdates();
-                }
-            }
-#endif
-
-            if (!isActive) { return; }
+            if (!isActive || IsLayerHidden) { return; }
 
             if (impactQueue != null)
             {
@@ -1825,31 +2265,62 @@ namespace Barotrauma
                     HandleCollision(impact);
                 }
             }
+            if (isDroppedStackOwner && body != null)
+            {
+                foreach (var item in droppedStack)
+                {
+                    if (item != this) 
+                    {
+                        item.body.Enabled = false;
+                        item.body.SetTransformIgnoreContacts(this.SimPosition, body.Rotation); 
+                    }
+                }
+            }
 
             if (aiTarget != null && aiTarget.NeedsUpdate)
             {
                 aiTarget.Update(deltaTime);
             }
 
+            var containedEffectType = parentInventory == null ? ActionType.OnNotContained : ActionType.OnContained;
+
             ApplyStatusEffects(ActionType.Always, deltaTime, character: (parentInventory as CharacterInventory)?.Owner as Character);
-            ApplyStatusEffects(parentInventory == null ? ActionType.OnNotContained : ActionType.OnContained, deltaTime, character: (parentInventory as CharacterInventory)?.Owner as Character);
+            ApplyStatusEffects(containedEffectType, deltaTime, character: (parentInventory as CharacterInventory)?.Owner as Character);
 
             for (int i = 0; i < updateableComponents.Count; i++)
             {
                 ItemComponent ic = updateableComponents[i];
 
-                if (ic.IsActiveConditionals != null)
+                bool isParentInActive = ic.InheritParentIsActive && ic.Parent is { IsActive: false };
+
+                if (ic.IsActiveConditionals != null && !isParentInActive)
                 {
-                    bool shouldBeActive = true;
-                    foreach (var conditional in ic.IsActiveConditionals)
+                    if (ic.IsActiveConditionalComparison == PropertyConditional.LogicalOperatorType.And)
                     {
-                        if (!ConditionalMatches(conditional)) 
+                        bool shouldBeActive = true;
+                        foreach (var conditional in ic.IsActiveConditionals)
                         {
-                            shouldBeActive = false;
-                            break;
+                            if (!ConditionalMatches(conditional)) 
+                            {
+                                shouldBeActive = false;
+                                break;
+                            }
                         }
+                        ic.IsActive = shouldBeActive;
                     }
-                    ic.IsActive = shouldBeActive;
+                    else
+                    {
+                        bool shouldBeActive = false;
+                        foreach (var conditional in ic.IsActiveConditionals)
+                        {
+                            if (ConditionalMatches(conditional))
+                            {
+                                shouldBeActive = true;
+                                break;
+                            }
+                        }
+                        ic.IsActive = shouldBeActive;
+                    }
                 }
 #if CLIENT
                 if (ic.HasSounds)
@@ -1888,14 +2359,17 @@ namespace Barotrauma
 
             if (Removed) { return; }
 
-            bool needsWaterCheck = hasWaterStatusEffects;
+            bool needsWaterCheck = hasInWaterStatusEffects || hasNotInWaterStatusEffects;
             if (body != null && body.Enabled)
             {
                 System.Diagnostics.Debug.Assert(body.FarseerBody.FixtureList != null);
 
                 if (Math.Abs(body.LinearVelocity.X) > 0.01f || Math.Abs(body.LinearVelocity.Y) > 0.01f || transformDirty)
                 {
-                    UpdateTransform();
+                    if (body.CollisionCategories != Category.None)
+                    {
+                        UpdateTransform();
+                    }
                     if (CurrentHull == null && Level.Loaded != null && body.SimPosition.Y < ConvertUnits.ToSimUnits(Level.MaxEntityDepth))
                     {
                         Spawner?.AddItemToRemoveQueue(this);
@@ -1914,8 +2388,7 @@ namespace Barotrauma
             if (needsWaterCheck)
             {
                 bool wasInWater = inWater;
-                inWater = IsInWater();
-                bool waterProof = WaterProof;
+                inWater = !inWaterProofContainer && IsInWater();
                 if (inWater)
                 {
                     //the item has gone through the surface of the water
@@ -1928,32 +2401,30 @@ namespace Barotrauma
                             body.LinearVelocity *= 0.2f;
                         }                   
                     }
+                }
+                if ((hasInWaterStatusEffects || hasNotInWaterStatusEffects) && condition > 0.0f)
+                {
+                    ApplyStatusEffects(inWater ? ActionType.InWater : ActionType.NotInWater, deltaTime);
+                }
+                if (inWaterProofContainer && !hasNotInWaterStatusEffects)
+                {
+                    needsWaterCheck = false;
+                }
+            }
 
-                    Item container = this.Container;
-                    while (!waterProof && container != null)
-                    {
-                        waterProof = container.WaterProof;
-                        container = container.Container;
-                    }
-                }
-                if (hasWaterStatusEffects && condition > 0.0f)
-                {
-                    ApplyStatusEffects(!waterProof && inWater ? ActionType.InWater : ActionType.NotInWater, deltaTime);
-                }
-            }
-            else
+            if (!needsWaterCheck &&
+                updateableComponents.Count == 0 && 
+                (aiTarget == null || !aiTarget.NeedsUpdate) && 
+                !hasStatusEffectsOfType[(int)ActionType.Always] && 
+                !hasStatusEffectsOfType[(int)containedEffectType] && 
+                (body == null || !body.Enabled))
             {
-                if (updateableComponents.Count == 0 && 
-                    (aiTarget == null || !aiTarget.NeedsUpdate) && 
-                    !hasStatusEffectsOfType[(int)ActionType.Always] && 
-                    (body == null || !body.Enabled))
-                {
 #if CLIENT
-                    positionBuffer.Clear();
+                positionBuffer.Clear();
 #endif
-                    isActive = false;
-                }
+                isActive = false;
             }
+            
         }
 
         partial void Splash();
@@ -2064,7 +2535,7 @@ namespace Barotrauma
                 Vector2 frontVel = body.FarseerBody.GetLinearVelocityFromLocalPoint(localFront);
 
                 float speed = frontVel.Length();
-                float drag = speed * speed * waterDragCoefficient * volume * Physics.NeutralDensity;
+                float drag = speed * speed * WaterDragCoefficient * volume * Physics.NeutralDensity;
                 //very small drag on active projectiles to prevent affecting their trajectories much
                 if (body.FarseerBody.IsBullet) { drag *= 0.1f; }
                 Vector2 dragVec = -frontVel / speed * drag;
@@ -2075,7 +2546,7 @@ namespace Barotrauma
             }
 
             //no need to apply buoyancy if the item is still and not light enough to float
-            if (moving || body.Density < 10.0f)
+            if (moving || body.Density <= 10.0f)
             {
                 Vector2 buoyancy = -GameMain.World.Gravity * forceFactor * volume * Physics.NeutralDensity;
                 body.ApplyForce(buoyancy);
@@ -2096,18 +2567,22 @@ namespace Barotrauma
             var projectile = GetComponent<Projectile>();
             if (projectile != null)
             {
-                //ignore character colliders (a projectile only hits limbs)
-                if (f2.CollisionCategories == Physics.CollisionCharacter && f2.Body.UserData is Character) { return false; }
+                // Ignore characters so that the impact sound only plays when the item hits a a wall or a door.
+                // Projectile collisions are handled in Projectile.OnProjectileCollision(), so it should be safe to do this.
+                if (f2.CollisionCategories == Physics.CollisionCharacter) { return false; }
                 if (projectile.IgnoredBodies != null && projectile.IgnoredBodies.Contains(f2.Body)) { return false; }
                 if (projectile.ShouldIgnoreSubmarineCollision(f2, contact)) { return false; }
             }
 
-            contact.GetWorldManifold(out Vector2 normal, out _);
-            if (contact.FixtureA.Body == f1.Body) { normal = -normal; }
-            float impact = Vector2.Dot(f1.Body.LinearVelocity, -normal);
+            if (GameMain.GameSession == null || GameMain.GameSession.RoundDuration > 1.0f)
+            {
+                contact.GetWorldManifold(out Vector2 normal, out _);
+                if (contact.FixtureA.Body == f1.Body) { normal = -normal; }
+                float impact = Vector2.Dot(f1.Body.LinearVelocity, -normal);
+                impactQueue ??= new ConcurrentQueue<float>();
+                impactQueue.Enqueue(impact);
+            }
 
-            impactQueue ??= new ConcurrentQueue<float>();
-            impactQueue.Enqueue(impact);
             isActive = true;
 
             return true;
@@ -2118,9 +2593,12 @@ namespace Barotrauma
             OnCollisionProjSpecific(impact);
             if (GameMain.NetworkMember is { IsClient: true }) { return; }
 
-            if (ImpactTolerance > 0.0f && condition > 0.0f && Math.Abs(impact) > ImpactTolerance)
+            if (ImpactTolerance > 0.0f && Math.Abs(impact) > ImpactTolerance && hasStatusEffectsOfType[(int)ActionType.OnImpact])
             {
-                ApplyStatusEffects(ActionType.OnImpact, 1.0f);
+                foreach (StatusEffect effect in statusEffectLists[ActionType.OnImpact])
+                {
+                    ApplyStatusEffect(effect, ActionType.OnImpact, deltaTime: 1.0f);
+                }
 #if SERVER
                 GameMain.Server?.CreateEntityEvent(this, new ApplyStatusEffectEventData(ActionType.OnImpact));
 #endif
@@ -2147,7 +2625,7 @@ namespace Barotrauma
 
             if (Prefab.AllowRotatingInEditor)
             {
-                RotationRad = MathUtils.WrapAngleTwoPi(-RotationRad);
+                RotationRad = MathUtils.WrapAnglePi(-RotationRad);
             }
 #if CLIENT
             if (Prefab.CanSpriteFlipX)
@@ -2174,6 +2652,10 @@ namespace Barotrauma
                 return;
             }
 
+            if (Prefab.AllowRotatingInEditor)
+            {
+                RotationRad = MathUtils.WrapAngleTwoPi(-RotationRad);
+            }
 #if CLIENT
             if (Prefab.CanSpriteFlipY)
             {
@@ -2208,8 +2690,7 @@ namespace Barotrauma
             foreach (Connection c in connectionPanel.Connections)
             {
                 if (connectionFilter != null && !connectionFilter.Invoke(c)) { continue; }
-                var recipients = c.Recipients;
-                foreach (Connection recipient in recipients)
+                foreach (Connection recipient in c.Recipients)
                 {
                     var component = recipient.Item.GetComponent<T>();
                     if (component != null && !connectedComponents.Contains(component))
@@ -2262,9 +2743,20 @@ namespace Barotrauma
         private void GetConnectedComponentsRecursive<T>(Connection c, HashSet<Connection> alreadySearched, List<T> connectedComponents, bool ignoreInactiveRelays, bool allowTraversingBackwards = true) where T : ItemComponent
         {
             alreadySearched.Add(c);
-                        
-            var recipients = c.Recipients;
-            foreach (Connection recipient in recipients)
+            static IEnumerable<Connection> GetRecipients(Connection c)
+            {
+                foreach (Connection recipient in c.Recipients)
+                {
+                    yield return recipient;
+                }
+                //check circuit box inputs/outputs this connection is connected to
+                foreach (var circuitBoxConnection in c.CircuitBoxConnections)
+                {
+                    yield return circuitBoxConnection.Connection;
+                }
+            }
+
+            foreach (Connection recipient in GetRecipients(c))
             {
                 if (alreadySearched.Contains(recipient)) { continue; }
                 var component = recipient.Item.GetComponent<T>();                    
@@ -2273,23 +2765,53 @@ namespace Barotrauma
                     connectedComponents.Add(component);
                 }
 
-                //connected to a wifi component -> see which other wifi components it can communicate with
-                var wifiComponent = recipient.Item.GetComponent<WifiComponent>();
-                if (wifiComponent != null && wifiComponent.CanTransmit())
+                var circuitBox = recipient.Item.GetComponent<CircuitBox>();
+                if (circuitBox != null)
                 {
-                    foreach (var wifiReceiver in wifiComponent.GetTransmittersInRange())
+                    //if this is a circuit box, check what the connection is connected to inside the box
+                    var potentialCbConnection = circuitBox.FindInputOutputConnection(recipient);
+                    if (potentialCbConnection.TryUnwrap(out var cbConnection))
                     {
-                        var receiverConnections = wifiReceiver.Item.Connections;
-                        if (receiverConnections == null) { continue; }
-                        foreach (Connection wifiOutput in receiverConnections)
+                        if (cbConnection is CircuitBoxInputConnection inputConnection)
                         {
-                            if ((wifiOutput.IsOutput == recipient.IsOutput) || alreadySearched.Contains(wifiOutput)) { continue; }
-                            GetConnectedComponentsRecursive(wifiOutput, alreadySearched, connectedComponents, ignoreInactiveRelays, allowTraversingBackwards);
+                            foreach (var connectedTo in inputConnection.ExternallyConnectedTo)
+                            {
+                                if (alreadySearched.Contains(connectedTo.Connection)) { continue; }
+                                CheckRecipient(connectedTo.Connection);
+                            }
+                        }
+                        else
+                        {
+                            foreach (var connectedFrom in cbConnection.ExternallyConnectedFrom)
+                            {
+                                if (alreadySearched.Contains(connectedFrom.Connection) || !allowTraversingBackwards) { continue; }
+                                CheckRecipient(connectedFrom.Connection);
+                            }
                         }
                     }
                 }
+                CheckRecipient(recipient);
 
-                recipient.Item.GetConnectedComponentsRecursive(recipient, alreadySearched, connectedComponents, ignoreInactiveRelays, allowTraversingBackwards);                   
+                void CheckRecipient(Connection recipient)
+                {
+                    //connected to a wifi component -> see which other wifi components it can communicate with
+                    var wifiComponent = recipient.Item.GetComponent<WifiComponent>();
+                    if (wifiComponent != null && wifiComponent.CanTransmit())
+                    {
+                        foreach (var wifiReceiver in wifiComponent.GetTransmittersInRange())
+                        {
+                            var receiverConnections = wifiReceiver.Item.Connections;
+                            if (receiverConnections == null) { continue; }
+                            foreach (Connection wifiOutput in receiverConnections)
+                            {
+                                if ((wifiOutput.IsOutput == recipient.IsOutput) || alreadySearched.Contains(wifiOutput)) { continue; }
+                                GetConnectedComponentsRecursive(wifiOutput, alreadySearched, connectedComponents, ignoreInactiveRelays, allowTraversingBackwards);
+                            }
+                        }
+                    }
+
+                    recipient.Item.GetConnectedComponentsRecursive(recipient, alreadySearched, connectedComponents, ignoreInactiveRelays, allowTraversingBackwards); 
+                }                  
             }
 
             if (ignoreInactiveRelays)
@@ -2453,9 +2975,20 @@ namespace Barotrauma
 
         public bool TryInteract(Character user, bool ignoreRequiredItems = false, bool forceSelectKey = false, bool forceUseKey = false)
         {
-            if (CampaignMode.BlocksInteraction(CampaignInteractionType)) 
+            var campaignInteractionType = CampaignInteractionType;
+#if SERVER
+            var ownerClient = GameMain.Server.ConnectedClients.Find(c => c.Character == user);
+            if (ownerClient != null) 
             { 
-                return false; 
+                if (!campaignInteractionTypePerClient.TryGetValue(ownerClient, out campaignInteractionType))
+                {
+                    campaignInteractionType = CampaignMode.InteractionType.None;
+                }
+            }
+#endif
+            if (CampaignMode.BlocksInteraction(campaignInteractionType))
+            {
+                return false;
             }
 
             bool picked = false, selected = false;
@@ -2547,11 +3080,20 @@ namespace Barotrauma
                     if (user == Character.Controlled) { GUI.ForceMouseOn(null); }
                     if (tempRequiredSkill != null) { requiredSkill = tempRequiredSkill; }
 #endif
-                    if (ic.CanBeSelected && !(ic is Door)) { selected = true; }
+                    if (ic.CanBeSelected && ic is not Door) { selected = true; }
                 }
+            }
+            if (ParentInventory?.Owner == user && 
+                GetComponent<ItemContainer>() != null)
+            {
+                //can't select ItemContainers in the character's inventory
+                //(the inventory is drawn by hovering the cursor over the inventory slot, not as a hovering interface on the screen)
+                selected = false;
             }
 
             if (!picked) { return false; }
+
+            OnInteract?.Invoke();
 
             if (user != null)
             {
@@ -2621,37 +3163,35 @@ namespace Barotrauma
             return -1;
         }
 
-        public void Use(float deltaTime, Character character = null, Limb targetLimb = null)
+        /// <param name="userForOnUsedEvent">User to pass to the OnUsed event. May need to be different than the user in cases like loaders using ammo boxes:
+        /// the box is technically being used by the loader, and doesn't allow a character to use it, but we may still need to know which character caused
+        /// the box to be used.</param>
+        public void Use(float deltaTime, Character user = null, Limb targetLimb = null, Entity useTarget = null, Character userForOnUsedEvent = null)
         {
-            if (RequireAimToUse && (character == null || !character.IsKeyDown(InputType.Aim)))
+            if (RequireAimToUse && (user == null || !user.IsKeyDown(InputType.Aim)))
             {
                 return;
             }
 
-            if (condition == 0.0f) { return; }
-
-            var should = GameMain.LuaCs.Hook.Call<bool?>("item.use", new object[] { this, character, targetLimb });
-
-            if (should != null && should.Value)
-                return;
-
+            if (condition <= 0.0f) { return; }
+        
             bool remove = false;
 
             foreach (ItemComponent ic in components)
             {
                 bool isControlled = false;
 #if CLIENT
-                isControlled = character == Character.Controlled;
+                isControlled = user == Character.Controlled;
 #endif
-                if (!ic.HasRequiredContainedItems(character, isControlled)) { continue; }
-                if (ic.Use(deltaTime, character))
+                if (!ic.HasRequiredContainedItems(user, isControlled)) { continue; }
+                if (ic.Use(deltaTime, user))
                 {
                     ic.WasUsed = true;
 #if CLIENT
-                    ic.PlaySound(ActionType.OnUse, character); 
+                    ic.PlaySound(ActionType.OnUse, user); 
 #endif
-                    ic.ApplyStatusEffects(ActionType.OnUse, deltaTime, character, targetLimb);
-
+                    ic.ApplyStatusEffects(ActionType.OnUse, deltaTime, user, targetLimb, useTarget: useTarget, user: user);
+                    ic.OnUsed.Invoke(new ItemComponent.ItemUseInfo(this, user ?? userForOnUsedEvent));
                     if (ic.DeleteOnUse) { remove = true; }
                 }
             }
@@ -2664,12 +3204,7 @@ namespace Barotrauma
 
         public void SecondaryUse(float deltaTime, Character character = null)
         {
-            if (condition == 0.0f) { return; }
-
-            var should = GameMain.LuaCs.Hook.Call<bool?>("item.secondaryUse", this, character);
-
-            if (should != null && should.Value)
-                return;
+            if (condition <= 0.0f) { return; }
 
             bool remove = false;
 
@@ -2686,7 +3221,7 @@ namespace Barotrauma
 #if CLIENT
                     ic.PlaySound(ActionType.OnSecondaryUse, character);
 #endif
-                    ic.ApplyStatusEffects(ActionType.OnSecondaryUse, deltaTime, character);
+                    ic.ApplyStatusEffects(ActionType.OnSecondaryUse, deltaTime, character: character, user: character, useTarget: character);
 
                     if (ic.DeleteOnUse) { remove = true; }
                 }
@@ -2704,46 +3239,47 @@ namespace Barotrauma
             if (character.IsDead) { return; }
             if (!UseInHealthInterface) { return; }
 
+            if (Prefab.ContentPackage == ContentPackageManager.VanillaCorePackage &&
+                /* we don't need info of every item, we can get a good sample size just by logging 5% */
+                Rand.Range(0.0f, 1.0f) < 0.05f)
+            {
+                GameAnalyticsManager.AddDesignEvent("ApplyTreatment:" + Prefab.Identifier);
+            }
 #if CLIENT
+            if (user == Character.Controlled)
+            {
+                if (HealingCooldown.IsOnCooldown) { return; }
+
+                HealingCooldown.PutOnCooldown();
+            }
+
             if (GameMain.Client != null)
             {
                 GameMain.Client.CreateEntityEvent(this, new TreatmentEventData(character, targetLimb));
                 return;
             }
 #endif
-
-            float applyOnSelfFraction = user?.GetStatValue(StatTypes.ApplyTreatmentsOnSelfFraction) ?? 0.0f;
-
             bool remove = false;
             foreach (ItemComponent ic in components)
             {
                 if (!ic.HasRequiredContainedItems(user, addMessage: user == Character.Controlled)) { continue; }
 
                 bool success = Rand.Range(0.0f, 0.5f) < ic.DegreeOfSuccess(user);
-                ActionType actionType = success ? ActionType.OnUse : ActionType.OnFailure;
+                ActionType conditionalActionType = success ? ActionType.OnSuccess : ActionType.OnFailure;
 
 #if CLIENT
-                ic.PlaySound(actionType, user);
+                ic.PlaySound(conditionalActionType, user);
+                ic.PlaySound(ActionType.OnUse, user);
 #endif
                 ic.WasUsed = true;
-                ic.ApplyStatusEffects(actionType, 1.0f, character, targetLimb, user: user, applyOnUserFraction: applyOnSelfFraction);
 
-                if (applyOnSelfFraction > 0.0f)
-                {
-                    //hacky af
-                    ic.statusEffectLists.TryGetValue(actionType, out var effectList);
-                    if (effectList != null)
-                    {
-                        effectList.ForEach(e => e.AfflictionMultiplier = applyOnSelfFraction);
-                        ic.ApplyStatusEffects(actionType, 1.0f, user, targetLimb == null ? null : user.AnimController.GetLimb(targetLimb.type), user: user);
-                        effectList.ForEach(e => e.AfflictionMultiplier = 1.0f);
-                    }
-                }
+                ic.ApplyStatusEffects(conditionalActionType, 1.0f, character, targetLimb, useTarget: character, user: user);
+                ic.ApplyStatusEffects(ActionType.OnUse, 1.0f, character, targetLimb, useTarget: character, user: user);
 
                 if (GameMain.NetworkMember is { IsServer: true })
                 {
-                    GameMain.NetworkMember.CreateEntityEvent(this, new ApplyStatusEffectEventData(
-                        actionType, ic, character, targetLimb));
+                    GameMain.NetworkMember.CreateEntityEvent(this, new ApplyStatusEffectEventData(conditionalActionType, ic, character, targetLimb, useTarget: character));
+                    GameMain.NetworkMember.CreateEntityEvent(this, new ApplyStatusEffectEventData(ActionType.OnUse, ic, character, targetLimb, useTarget: character));
                 }
 
                 if (ic.DeleteOnUse) { remove = true; }
@@ -2751,9 +3287,8 @@ namespace Barotrauma
 
             if (user != null)
             {
-                var abilityItem = new AbilityApplyTreatment(user, character, this);
+                var abilityItem = new AbilityApplyTreatment(user, character, this, targetLimb);
                 user.CheckTalents(AbilityEffectType.OnApplyTreatment, abilityItem);
-
             }
 
             if (remove) { Spawner?.AddItemToRemoveQueue(this); }
@@ -2813,7 +3348,7 @@ namespace Barotrauma
                 }
             }
 
-            foreach (ItemComponent ic in components) { ic.Drop(dropper); }
+            foreach (ItemComponent ic in components) { ic.Drop(dropper, setTransform); }
             
             if (Container != null)
             {
@@ -2825,16 +3360,142 @@ namespace Barotrauma
                 Container = null;
             }
             
-            if (parentInventory != null)
+            if (ParentInventory != null)
             {
-                parentInventory.RemoveItem(this);
-                parentInventory = null;
+                ParentInventory.RemoveItem(this);
+                ParentInventory = null;
             }
 
             SetContainedItemPositions();
 #if CLIENT
             Submarine.ForceVisibilityRecheck();
 #endif
+        }
+
+
+        private List<Item> droppedStack;
+        public IEnumerable<Item> DroppedStack => droppedStack ?? Enumerable.Empty<Item>();
+
+        private bool isDroppedStackOwner;
+
+        /// <summary>
+        /// "Merges" the set of items so they behave as one physical object and can be picked up by clicking once.
+        /// The items need to be instances of the same prefab and have a physics body.
+        /// </summary>
+        public void CreateDroppedStack(IEnumerable<Item> items, bool allowClientExecute)
+        {
+            if (!allowClientExecute && GameMain.NetworkMember is { IsClient: true }) { return; }
+
+            int itemCount = items.Count();
+
+            if (itemCount == 1) { return; }
+
+            if (items.DistinctBy(it => it.Prefab).Count() > 1)
+            {
+                DebugConsole.ThrowError($"Attempted to create a dropped stack of multiple different items ({string.Join(", ", items.DistinctBy(it => it.Prefab))})\n{Environment.StackTrace}");
+                return;
+            }
+            if (items.Any(it => it.body == null))
+            {
+                DebugConsole.ThrowError($"Attempted to create a dropped stack for an item with no body ({items.First().Prefab.Identifier})\n{Environment.StackTrace}");
+                return;
+            }
+            if (items.None())
+            {
+                DebugConsole.ThrowError($"Attempted to create a dropped stack of an empty list of items.\n{Environment.StackTrace}");
+                return;
+            }
+
+            int maxStackSize = items.First().Prefab.MaxStackSize;
+            if (itemCount > maxStackSize)
+            {
+                for (int i = 0; i < MathF.Ceiling(itemCount / maxStackSize); i++)
+                {
+                    int startIndex = i * maxStackSize;
+                    items.ElementAt(startIndex).CreateDroppedStack(items.Skip(startIndex).Take(maxStackSize), allowClientExecute);
+                }
+            }
+            else
+            {
+                droppedStack ??= new List<Item>();
+                foreach (Item item in items)
+                {
+                    if (!droppedStack.Contains(item))
+                    {
+                        droppedStack.Add(item);
+                    }
+                }
+                SetDroppedStackItemStates();
+#if SERVER
+                if (GameMain.NetworkMember is { IsServer: true } server)
+                {
+                    server.CreateEntityEvent(this, new DroppedStackEventData(droppedStack));
+                }
+#endif
+            }
+        }
+
+        private void RemoveFromDroppedStack(bool allowClientExecute)
+        {
+            if (!allowClientExecute && GameMain.NetworkMember is { IsClient: true }) { return; }            
+            if (droppedStack == null) { return; }
+
+            body.Enabled = ParentInventory == null;
+            isDroppedStackOwner = false;
+            droppedStack.Remove(this);
+            SetDroppedStackItemStates();
+            droppedStack = null;
+#if SERVER
+            if (GameMain.NetworkMember is { IsServer: true } server && !Removed)
+            {
+                server.CreateEntityEvent(this, new DroppedStackEventData(Enumerable.Empty<Item>()));
+            }
+#endif
+        }
+
+        private void SetDroppedStackItemStates()
+        {
+            if (droppedStack == null) { return; }
+            bool isFirst = true;
+            foreach (Item item in droppedStack)
+            {
+                item.droppedStack = droppedStack;
+                item.isDroppedStackOwner = isFirst;
+                if (item.body != null)
+                {
+                    item.body.Enabled = item.body.PhysEnabled = isFirst;
+                    if (isFirst)
+                    {
+                        item.isActive = true;
+                        item.body.ResetDynamics();
+                    }
+                }
+                isFirst = false;
+            }
+        }
+
+
+        /// <summary>
+        /// Returns this item and all the other items in the stack (either in the same inventory slot, or the same dropped stack).
+        /// </summary>
+        /// <returns></returns>
+        public IEnumerable<Item> GetStackedItems()
+        {
+            yield return this;
+            foreach (var stackedItem in DroppedStack)
+            {
+                if (stackedItem == this) { continue; }
+                yield return stackedItem;
+            }
+            if (ParentInventory != null)
+            {
+                int slotIndex = ParentInventory.FindIndex(this);
+                foreach (var stackedItem in ParentInventory.GetItemsAt(slotIndex))
+                {
+                    if (stackedItem == this) { continue; }
+                    yield return stackedItem;
+                }
+            }
         }
 
         public void Equip(Character character)
@@ -2846,11 +3507,14 @@ namespace Barotrauma
             }
 
             foreach (ItemComponent ic in components) { ic.Equip(character); }
+
+            CharacterHUD.RecreateHudTextsIfControlling(character);
         }
 
         public void Unequip(Character character)
         {
             foreach (ItemComponent ic in components) { ic.Unequip(character); }
+            CharacterHUD.RecreateHudTextsIfControlling(character);
         }
 
         public List<(object obj, SerializableProperty property)> GetProperties<T>()
@@ -2879,15 +3543,20 @@ namespace Barotrauma
             //to ensure client/server doesn't get any properties mixed up if there's some conditions that can vary between the server and the clients
             var allProperties = inGameEditableOnly ? GetInGameEditableProperties(ignoreConditions: true) : GetProperties<Editable>();
             SerializableProperty property = extraData.SerializableProperty;
+            ISerializableEntity entity = extraData.Entity;
             if (property != null)
             {
-                var propertyOwner = allProperties.Find(p => p.property == property);
                 if (allProperties.Count > 1)
                 {
-                    msg.WriteByte((byte)allProperties.FindIndex(p => p.property == property));
+                    int propertyIndex = allProperties.FindIndex(p => p.property == property && p.obj == entity);
+                    if (propertyIndex < 0)
+                    {
+                        throw new Exception($"Could not find the property \"{property.Name}\" in \"{entity.Name ?? "null"}\"");
+                    }
+                    msg.WriteVariableUInt32((uint)propertyIndex);
                 }
 
-                object value = property.GetValue(propertyOwner.obj);
+                object value = property.GetValue(entity);
                 if (value is string stringVal)
                 {
                     msg.WriteString(stringVal);
@@ -2992,7 +3661,12 @@ namespace Barotrauma
             int propertyIndex = 0;
             if (allProperties.Count > 1)
             {
-                propertyIndex = msg.ReadByte();
+                propertyIndex = (int)msg.ReadVariableUInt32();
+            }
+
+            if (propertyIndex >= allProperties.Count || propertyIndex < 0)
+            {
+                throw new Exception($"Error in ReadPropertyChange. Property index out of bounds (index: {propertyIndex}, property count: {allProperties.Count}, in-game editable only: {inGameEditableOnly})");
             }
 
             bool allowEditing = true;
@@ -3005,15 +3679,30 @@ namespace Barotrauma
 
             if (GameMain.NetworkMember != null && GameMain.NetworkMember.IsServer)
             {
-                if (!CanClientAccess(sender) || !(property.GetAttribute<ConditionallyEditable>()?.IsEditable(this) ?? true))
+                bool conditionAllowsEditing = true;
+                if (property.GetAttribute<ConditionallyEditable>() is { } condition)
+                {
+                    conditionAllowsEditing = condition.IsEditable(this);
+                }
+
+                bool canAccess = false;
+                if (Container?.GetComponent<CircuitBox>() is { } cb &&
+                    Container.CanClientAccess(sender))
+                {
+                    //items inside circuit boxes are inaccessible by "normal" means,
+                    //but the properties can still be edited through the circuit box UI
+                    canAccess = !cb.Locked;
+                }
+                else
+                {
+                    canAccess = CanClientAccess(sender);
+                }
+
+                if (!canAccess || !conditionAllowsEditing)
                 {
                     allowEditing = false;
                 }
             }
-
-            var result = GameMain.LuaCs.Hook.Call<bool?>("item.readPropertyChange", this, property, parentObject, allowEditing);
-            if (result != null && result.Value)
-                return;
 
             Type type = property.PropertyType;
             string logValue = "";
@@ -3136,15 +3825,14 @@ namespace Barotrauma
                 }
                 logPropertyChangeCoroutine = CoroutineManager.Invoke(() =>
                 {
-                    if(sender.Character != null)
-                        GameServer.Log($"{sender.Character.Name} set the value \"{property.Name}\" of the item \"{Name}\" to \"{logValue}\".", ServerLog.MessageType.ItemInteraction);
+                    GameServer.Log($"{sender.Character?.Name ?? sender.Name} set the value \"{property.Name}\" of the item \"{Name}\" to \"{logValue}\".", ServerLog.MessageType.ItemInteraction);
                 }, delay: 1.0f);
             }
 #endif
 
-            if (GameMain.NetworkMember is { IsServer: true })
+            if (GameMain.NetworkMember is { IsServer: true } && parentObject is ISerializableEntity entity)
             {
-                GameMain.NetworkMember.CreateEntityEvent(this, new ChangePropertyEventData(property));
+                GameMain.NetworkMember.CreateEntityEvent(this, new ChangePropertyEventData(property, entity));
             }
         }
 
@@ -3248,7 +3936,7 @@ namespace Barotrauma
                         {
                             if (!(property.GetValue(item)?.Equals(prevValue) ?? true))
                             {
-                                GameMain.NetworkMember.CreateEntityEvent(item, new ChangePropertyEventData(property));
+                                GameMain.NetworkMember.CreateEntityEvent(item, new ChangePropertyEventData(property, item));
                             }
                         }
                     }
@@ -3261,7 +3949,8 @@ namespace Barotrauma
 
             //if we're overriding a non-overridden item in a sub/assembly xml or vice versa, 
             //use the values from the prefab instead of loading them from the sub/assembly xml
-            bool usePrefabValues = thisIsOverride != ItemPrefab.Prefabs.IsOverride(prefab) || appliedSwap != null;
+            bool isItemSwap = appliedSwap != null;
+            bool usePrefabValues = thisIsOverride != ItemPrefab.Prefabs.IsOverride(prefab) || isItemSwap;
             List<ItemComponent> unloadedComponents = new List<ItemComponent>(item.components);
             foreach (var subElement in element.Elements())
             {
@@ -3274,7 +3963,7 @@ namespace Barotrauma
                             int level = subElement.GetAttributeInt("level", 1);
                             if (upgradePrefab != null)
                             {
-                                item.AddUpgrade(new Upgrade(item, upgradePrefab, level, appliedSwap != null ? null : subElement));
+                                item.AddUpgrade(new Upgrade(item, upgradePrefab, level, isItemSwap ? null : subElement));
                             }
                             else
                             {
@@ -3283,17 +3972,22 @@ namespace Barotrauma
                             }
                             break;
                         }
+                    case "itemstats":
+                        {
+                            item.StatManager.Load(subElement);
+                            break;
+                        }
                     default:
                         {
                             ItemComponent component = unloadedComponents.Find(x => x.Name == subElement.Name.ToString());
                             if (component == null) { continue; }
-                            component.Load(subElement, usePrefabValues, idRemap);
+                            component.Load(subElement, usePrefabValues, idRemap, isItemSwap);
                             unloadedComponents.Remove(component);
                             break;
                         }
                 }
             }
-            if (usePrefabValues && appliedSwap == null)
+            if (usePrefabValues && !isItemSwap)
             {
                 //use prefab scale when overriding a non-overridden item or vice versa
                 item.Scale = prefab.ConfigElement.GetAttributeFloat(item.scale, "scale", "Scale");
@@ -3310,6 +4004,8 @@ namespace Barotrauma
                     item.AvailableSwaps.Add(swapPrefab);
                 }
             }
+
+            if (element.GetAttributeBool("markedfordeconstruction", false)) { deconstructItems.Add(item); }
 
             float prevRotation = item.Rotation;
             if (element.GetAttributeBool("flippedx", false)) { item.FlipX(false); }
@@ -3367,12 +4063,6 @@ namespace Barotrauma
                 item.PurchasedNewSwap = false;
             }
 
-            item.condition = element.GetAttributeFloat("condition", item.condition);
-            item.condition = MathHelper.Clamp(item.condition, 0, item.MaxCondition);
-            item.lastSentCondition = item.condition;
-            item.RecalculateConditionValues();
-            item.SetActiveSprite();
-
             Version savedVersion = submarine?.Info.GameVersion;
             if (element.Document?.Root != null && element.Document.Root.Name.ToString().Equals("gamesession", StringComparison.OrdinalIgnoreCase))
             {
@@ -3380,17 +4070,46 @@ namespace Barotrauma
                 //(the sub may have already been saved and up-to-date, even though the character inventories aren't)
                 savedVersion = new Version(element.Document.Root.GetAttributeString("version", "0.0.0.0"));
             }
-            
+
+            float prevCondition = item.condition;
             if (savedVersion != null)
             {
                 SerializableProperty.UpgradeGameVersion(item, item.Prefab.ConfigElement, savedVersion);
             }
 
+            if (element.GetAttribute("conditionpercentage") != null)
+            {
+                item.condition = element.GetAttributeFloat("conditionpercentage", 100.0f) / 100.0f * item.MaxCondition;
+            }
+            else
+            {
+                //backwards compatibility
+                item.condition = element.GetAttributeFloat("condition", item.condition);
+                //if the item was in full condition considering the unmodified health
+                //(not taking possible HealthMultipliers added by mods into account),
+                //make sure it stays in full condition
+                if (item.condition > 0)
+                {
+                    bool wasFullCondition = prevCondition >= item.Prefab.Health;
+                    if (wasFullCondition)
+                    {
+                        item.condition = item.MaxCondition;
+                    }
+                    item.condition = MathHelper.Clamp(item.condition, 0, item.MaxCondition);
+                }
+            }
+            item.lastSentCondition = item.prevCondition = item.condition;
+            item.RecalculateConditionValues();
+            item.SetActiveSprite();
+
             foreach (ItemComponent component in item.components)
             {
+                if (component.Parent != null && component.InheritParentIsActive) { component.IsActive = component.Parent.IsActive; }
                 component.OnItemLoaded();
             }
-            
+
+            item.FullyInitialized = true;
+
             return item;
         }
 
@@ -3401,7 +4120,8 @@ namespace Barotrauma
             element.Add(
                 new XAttribute("name", Prefab.OriginalName),
                 new XAttribute("identifier", Prefab.Identifier),
-                new XAttribute("ID", ID));
+                new XAttribute("ID", ID),
+                new XAttribute("markedfordeconstruction", deconstructItems.Contains(this)));
 
             if (PendingItemSwap != null)
             {
@@ -3419,17 +4139,12 @@ namespace Barotrauma
                 element.Add(new XAttribute("availableswaps", string.Join(',', AvailableSwaps.Select(s => s.Identifier))));
             }
 
-            if (condition < MaxCondition)
-            {
-                element.Add(new XAttribute("condition", condition.ToString("G", CultureInfo.InvariantCulture)));
-            }
-
             if (!MathUtils.NearlyEqual(healthMultiplier, 1.0f))
             {
                 element.Add(new XAttribute("healthmultiplier", HealthMultiplier.ToString("G", CultureInfo.InvariantCulture)));
             }
 
-            Item rootContainer = GetRootContainer() ?? this;
+            Item rootContainer = RootContainer ?? this;
             System.Diagnostics.Debug.Assert(Submarine != null || rootContainer.ParentInventory?.Owner is Character);
 
             Vector2 subPosition = Submarine == null ? Vector2.Zero : Submarine.HiddenSubPosition;
@@ -3459,6 +4174,13 @@ namespace Barotrauma
             {
                 upgrade.Save(element);
             }
+
+            statManager?.Save(element);
+
+            element.Add(new XAttribute("conditionpercentage", ConditionPercentage.ToString("G", CultureInfo.InvariantCulture)));
+
+            var conditionAttribute = element.GetAttribute("condition");
+            if (conditionAttribute != null) { conditionAttribute.Remove(); }            
 
             parentElement.Add(element);
 
@@ -3510,8 +4232,6 @@ namespace Barotrauma
                 body.Remove();
                 body = null;
             }
-
-            GameMain.LuaCs.Hook.Call("item.removed", this);
         }
 
         public override void Remove()
@@ -3596,8 +4316,6 @@ namespace Barotrauma
             }
 
             RemoveProjSpecific();
-
-            GameMain.LuaCs.Hook.Call("item.removed", this);
         }
 
         private void RemoveFromLists()
@@ -3605,7 +4323,10 @@ namespace Barotrauma
             ItemList.Remove(this);
             dangerousItems.Remove(this);
             repairableItems.Remove(this);
+            sonarVisibleItems.Remove(this);
             cleanableItems.Remove(this);
+            deconstructItems.Remove(this);
+            RemoveFromDroppedStack(allowClientExecute: true);
         }
 
         partial void RemoveProjSpecific();
@@ -3628,12 +4349,14 @@ namespace Barotrauma
         public Character Character { get; set; }
         public Character User { get; set; }
         public Item Item { get; set; }
+        public Limb TargetLimb { get; set; }
 
-        public AbilityApplyTreatment(Character user, Character target, Item item)
+        public AbilityApplyTreatment(Character user, Character target, Item item, Limb limb)
         {
             Character = target;
             User = user;
             Item = item;
+            TargetLimb = limb;
         }
     }
 }
